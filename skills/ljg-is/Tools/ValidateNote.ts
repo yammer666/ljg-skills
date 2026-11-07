@@ -139,32 +139,43 @@ type V5Fields = {
   guidance?: string;
 };
 
-const OPERATION_SPECIFIC = /(?:输入|输出|读入|写入|读取|接收|收下|交出|交回|交还|映射|比较|对照|选择|筛选|过滤|计算|运算|组织|整理|归并|连接|衔接|限制|约束|决定|判定|调整|保留|留下|排除|去掉|生成|改变|转换|转化|触发|驱动|查找|检索|匹配|收窄|展开|执行|运行|调用|返回|分解|拆成|拆开|合并|命中)/u;
-const OPERATION_LOOSE = /(?:作用|处理|把|将|让|使|通过|经由|借助|凭借|根据|按照|依照)/u;
-const OPERATION_PURPOSE_SLOGAN = /(?:用途是|用来|用于帮助|有助于|可以帮助|影响很大|值得关注|很重要|提高效率|改善体验)/u;
-const RECOGNITION_SHIFT = /(?:不是|并非|不再|不只|原来|原先|原本|本来|此前|以为|误以为|看成|当作|当成|意味着|这使|改变|改成|改为|修正|纠正|不能只|不能再|应当从|关键不在|关键在|真正)/u;
+const PROCESS_VERB = /(?:输入|输出|读入|写入|读取|接收|收下|交出|交回|交还|映射|比较|对照|选择|筛选|过滤|计算|运算|组织|归并|连接|衔接|限制|约束|决定|判定|调整|保留|留下|排除|去掉|生成|改变|转换|转化|触发|驱动|查找|检索|匹配|收窄|展开|执行|运行|调用|返回|分解|拆成|拆开|合并|命中)/u;
+const LOOSE_VERB = /(?:作用|处理|把|将|让|使|通过|经由|借助|凭借|根据|按照|依照)/u;
+const PRIOR_JUDGMENT = /(?:原来|原先|原本|本来|此前|以往|以为|误以为|看成|当作|当成|当做)/u;
+const CORRECTION = /(?:改成|改为|修正|纠正|不再|不能只|不能再|关键不在|(?<!只)不是|并非)/u;
+const DIRECT_CORRECTION = /(?:(?<!只)不是|并非|不再)/u;
 const FALSIFIER_CONDITION = /(?:如果|若(?!干)|假如|倘若|要是|一旦|假使|倘使|要不是)/u;
 const FALSIFIER_FAILURE = /站不住|不再成立|不再适用|不能再用|不成立/gu;
 const FALSIFIER_REVISION = /失效|重写|改写|推翻|推倒|需要改|得改|必须改|就要改|便要改/gu;
-const FAILURE_NEGATION = /(?:并非|并不是|不是|并没有|没有|不会|并不)$/u;
-const REVISION_NEGATION = /(?:不需要|不必|不用|不会|并不|没有|并未|绝不|不是|不能|不可|不得|无需|别|没|未|不|非)$/u;
+const NEGATED_PREDICATE = /(?:并不会|不会|并不|不用|不必|不需要|无需|没有|并未|绝不|不是|不能|不可|不得|别|没|未|不)(?:因此|因而|从而|所以|就此|就|才|还|仍然|依然|仍|也|并|都|再|马上|立刻|必然|一定|真的|其实)*$/u;
+const OBLIGATORY_REVISION = /不得不(?:因此|因而|从而|所以|就此|就|才|还|仍然|依然|仍|也|并|都|再|马上|立刻|必然|一定|真的|其实)*$/u;
 
 function operationRecordsMechanism(operation: string): boolean {
-  if (OPERATION_PURPOSE_SLOGAN.test(operation)) return false;
-  return OPERATION_SPECIFIC.test(operation) || OPERATION_LOOSE.test(operation);
+  const outsidePurpose = operation.replace(/(?:用途是|用来|用于帮助|有助于|可以帮助)[^。；\n]*/gu, "");
+  if (PROCESS_VERB.test(outsidePurpose)) return true;
+  if (/(?:用途是|用来|用于帮助|有助于|可以帮助)/u.test(operation)) return false;
+  return LOOSE_VERB.test(operation);
+}
+
+function recognitionHasContrast(recognition: string): boolean {
+  const corrects = CORRECTION.test(recognition);
+  if (PRIOR_JUDGMENT.test(recognition) && corrects) return true;
+  return DIRECT_CORRECTION.test(recognition);
+}
+
+function overturnIsNegated(before: string): boolean {
+  if (OBLIGATORY_REVISION.test(before)) return false;
+  return NEGATED_PREDICATE.test(before);
 }
 
 function hasAffirmativeOverturn(falsifier: string): boolean {
-  for (const match of falsifier.matchAll(FALSIFIER_FAILURE)) {
-    const before = falsifier.slice(Math.max(0, (match.index ?? 0) - 6), match.index ?? 0);
-    if (FAILURE_NEGATION.test(before)) continue;
-    return true;
-  }
-  for (const match of falsifier.matchAll(FALSIFIER_REVISION)) {
-    const before = falsifier.slice(Math.max(0, (match.index ?? 0) - 6), match.index ?? 0);
-    if (/不得不$/u.test(before)) return true;
-    if (REVISION_NEGATION.test(before)) continue;
-    return true;
+  for (const pattern of [FALSIFIER_FAILURE, FALSIFIER_REVISION]) {
+    for (const match of falsifier.matchAll(pattern)) {
+      const at = match.index ?? 0;
+      const before = falsifier.slice(Math.max(0, at - 12), at);
+      if (overturnIsNegated(before)) continue;
+      return true;
+    }
   }
   return false;
 }
@@ -242,7 +253,7 @@ function validateV5(
   const recognition = metadataValue(content, "recognition", format);
   if (!recognition) {
     errors.push("v5 必须用 recognition 元数据记录这番理解修正了哪种旧判断");
-  } else if ([...recognition].length < 18 || [...recognition].length > 200 || !RECOGNITION_SHIFT.test(recognition)) {
+  } else if ([...recognition].length < 18 || [...recognition].length > 200 || !recognitionHasContrast(recognition)) {
     errors.push("v5 recognition 要写出理解前后的判断差别，不能另起一句抽象感想");
   }
 

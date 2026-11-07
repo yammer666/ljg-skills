@@ -303,6 +303,80 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     expect(v5ErrorsFor(several).some((error) => error.includes("falsifier"))).toBe(true);
   });
 
+  test("judges mechanism, judgment contrast, and affirmative falsification by clause shape", () => {
+    const withField = (key: string, value: string) => goodV5Org().replace(new RegExp(`^#\\+${key}:.*$`, "mu"), `#+${key}: ${value}`);
+    const operationCases: Array<[string, boolean]> = [
+      ["缓存先按键查找已有结果，命中时直接返回，未命中才回源读取，从而提高效率。", true],
+      ["缓存先收下请求，再按键查找已有结果；命中时直接交回已存内容，未命中才回到源头读取。", true],
+      ["缓存先按键查找已有结果，命中时直接返回；它的用途是提高效率。", true],
+      ["它把重复读取映射成一次命中，未命中才回源，从而提高效率并改善体验。", true],
+      ["它的用途是帮助人们整理日常资料、提高效率并改善体验。", false],
+      ["它的用途是帮助人们提高效率并改善日常体验。", false],
+      ["它通过提高效率来发挥作用，用途是帮助人们改善体验。", false],
+      ["它用来帮助人们整理日常资料，从而提高效率。", false],
+    ];
+    for (const [value, accept] of operationCases) {
+      const note = withField("operation", value);
+      if (accept) expect(validateNoteText(v5OrgPath, note).ok, value).toBe(true);
+      else expect(v5ErrorsFor(note).some((error) => error.includes("operation")), value).toBe(true);
+    }
+
+    const recognitionCases: Array<[string, boolean]> = [
+      ["优化不是先有方向再做计算，目标函数本身就在规定什么变化会被系统当成进步。", true],
+      ["人们原先把缓存看成总会更新的副本，读过读写路径以后会改成：它只在命中时省掉一次取数。", true],
+      ["这说明人们原先把缓存看成总会更新的副本，之后会改成只在命中时省事。", true],
+      ["优化不是先有方向再做计算，而是先有一把可比较的尺子。", true],
+      ["人们不再把命中当成源头已经更新的证据。", true],
+      ["这个概念不只非常深刻，而且很有启发，值得大家反复体会其中的意味。", false],
+      ["这说明这个概念非常深刻，给人很大启发，值得反复体会。", false],
+      ["这个概念很深刻，让人感到启发，值得反复体会。", false],
+      ["其实这个概念给人一种深刻的启发，值得继续体会其中的意味。", false],
+      ["这个概念不只是非常深刻，而且很有启发，值得反复体会。", false],
+    ];
+    for (const [value, accept] of recognitionCases) {
+      const note = withField("recognition", value);
+      if (accept) expect(validateNoteText(v5OrgPath, note).ok, value).toBe(true);
+      else expect(v5ErrorsFor(note).some((error) => error.includes("recognition")), value).toBe(true);
+    }
+
+    const falsifierCases: Array<[string, boolean]> = [
+      ["假如缓存命中时仍然每次都回到源头读取整份数据，这套解释就失效了。", true],
+      ["如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。", true],
+      ["若比较所用的值和实际选择无关，那么当前解释就不成立。", true],
+      ["当前解释就得改写，假如命中时仍要回源读取整份数据。", true],
+      ["假如命中仍要回源，当前解释因此失效。", true],
+      ["假如命中仍要回源，当前解释不得不改写。", true],
+      ["假如缓存命中仍需回源，当前解释不会因此失效。", false],
+      ["假如缓存命中仍需回源，当前解释不会因此就失效。", false],
+      ["假如缓存命中仍需回源，当前解释依然成立，不需要改写。", false],
+      ["假如缓存命中仍需回源，当前解释并不会失效。", false],
+      ["假如缓存命中仍需回源，当前解释并不因此推翻。", false],
+      ["如果大家以后更加努力，整体结果就会变得更好。", false],
+      ["当前解释以后可能需要重写，不过现在还没有具体事实。", false],
+      ["若干人不同意这个说法，所以当前解释需要重写。", false],
+    ];
+    for (const [value, accept] of falsifierCases) {
+      const note = withField("falsifier", value);
+      if (accept) expect(validateNoteText(v5OrgPath, note).ok, value).toBe(true);
+      else expect(v5ErrorsFor(note).some((error) => error.includes("falsifier")), value).toBe(true);
+    }
+
+    const v4Negated = [
+      "假如缓存命中仍需回源，当前解释不会因此失效。",
+      "假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
+      "假如缓存命中仍需回源，当前解释并不因此推翻。",
+    ];
+    for (const value of v4Negated) {
+      const note = goodV4Org().replace(/^#\+falsifier:.*$/mu, `#+falsifier: ${value}`);
+      expect(errorsFor(note).some((error) => error.includes("falsifier")), value).toBe(true);
+    }
+    const v4Affirmative = goodV4Org().replace(
+      /^#\+falsifier:.*$/mu,
+      "#+falsifier: 假如命中仍要回源，当前解释因此失效。",
+    );
+    expect(validateNoteText(orgPath, v4Affirmative).ok).toBe(true);
+  });
+
   test("does not require a protagonist, forced back-action or question ending", () => {
     const result = validateNoteText(v5OrgPath, goodV5Org());
     expect(result.ok).toBe(true);
