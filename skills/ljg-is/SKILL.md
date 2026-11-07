@@ -78,6 +78,8 @@ user_invocable: true
 
 - **不要让元数据替正文说话。** `definition`、`operation`、`recognition` 与 `guidance` 是后台索引；正文可以用更自然的说法，但全文读回必须找到同一内容。
 
+- **不要把结构校验当成理解通过。** `ValidateNote` 只硬性拦截缺字段、长度、文件名和正文结构。机制、判断变化和推翻条件给出复核警告，`review_required` 不是读者评估通过，也不能自动写成 PASS。
+
 ## Examples
 
 **目标函数**

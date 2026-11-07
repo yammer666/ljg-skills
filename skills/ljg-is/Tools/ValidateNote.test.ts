@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { validateNoteText } from "./ValidateNote";
 
 const v5OrgPath = "/tmp/20260823T010203--理解-目标函数__is.org";
@@ -209,10 +212,24 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     expect(result.schema).toBe("ljg-is-v5");
     expect(result.definition).toBe(DEFINITION);
     expect(result.operation).toBe(OPERATION);
+    expect(result.review_required).toBe(true);
+    expect(result.review_status).toBe("review_required");
+    expect(result.warnings.join("\n")).toContain("不是理解通过");
+    expect(result.errors).toEqual([]);
   });
 
   test("accepts a complete v5 Markdown note", () => {
     expect(validateNoteText(v5MdPath, goodV5Markdown()).ok).toBe(true);
+  });
+
+  test("rejects a blank or too-short operation without treating that as a semantic keyword failure", () => {
+    const blank = goodV5Org().replace(/^#\+operation:.*\n/mu, "");
+    const short = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 只写半句。");
+    expect(v5ErrorsFor(blank).some((error) => error.includes("operation"))).toBe(true);
+    expect(validateNoteText(v5OrgPath, blank).ok).toBe(false);
+    expect(validateNoteText(v5OrgPath, blank).review_status).toBe("structural_fail");
+    expect(v5ErrorsFor(short).some((error) => error.includes("长度"))).toBe(true);
+    expect(validateNoteText(v5OrgPath, short).ok).toBe(false);
   });
 
   test("requires definition, operation, recognition and guidance", () => {
@@ -262,7 +279,7 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     expect(validateNoteText(v5OrgPath, contrastiveExplanation).ok).toBe(true);
   });
 
-  test("still rejects purpose-only operation, abstract recognition, and non-falsifying counterevidence", () => {
+  test("warns on purpose-only, abstract, and negated wording instead of rejecting it", () => {
     const purpose = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 它的用途是帮助人们提高效率并改善日常体验。");
     const slogan = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 它通过提高效率来发挥作用，用途是帮助人们改善体验。");
     const abstract = goodV5Org().replace(`#+recognition: ${RECOGNITION}`, "#+recognition: 这个概念很深刻，让人感到启发，值得反复体会。");
@@ -291,16 +308,14 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
       "#+falsifier: 假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
     );
-    expect(v5ErrorsFor(purpose).some((error) => error.includes("operation"))).toBe(true);
-    expect(v5ErrorsFor(arrangePurpose).some((error) => error.includes("operation"))).toBe(true);
-    expect(v5ErrorsFor(explainsAbstract).some((error) => error.includes("recognition"))).toBe(true);
-    expect(v5ErrorsFor(negatedFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
-    expect(v5ErrorsFor(slogan).some((error) => error.includes("operation"))).toBe(true);
-    expect(v5ErrorsFor(abstract).some((error) => error.includes("recognition"))).toBe(true);
-    expect(v5ErrorsFor(bareActually).some((error) => error.includes("recognition"))).toBe(true);
-    expect(v5ErrorsFor(noCondition).some((error) => error.includes("falsifier"))).toBe(true);
-    expect(v5ErrorsFor(noOverturn).some((error) => error.includes("falsifier"))).toBe(true);
-    expect(v5ErrorsFor(several).some((error) => error.includes("falsifier"))).toBe(true);
+    for (const note of [purpose, slogan, arrangePurpose, abstract, bareActually, explainsAbstract, noCondition, noOverturn, several, negatedFalsifier]) {
+      const result = validateNoteText(v5OrgPath, note);
+      expect(result.ok, note).toBe(true);
+      expect(result.review_required, note).toBe(true);
+      expect(result.review_status, note).toBe("review_required");
+      expect(result.warnings.join("\n"), note).toContain("需复核");
+      expect(result.errors.join("\n"), note).not.toMatch(/operation|recognition|falsifier/);
+    }
   });
 
   test("judges mechanism, judgment contrast, and affirmative falsification by clause shape", () => {
@@ -315,13 +330,15 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       ["它通过提高效率来发挥作用，用途是帮助人们改善体验。", false],
       ["它用来帮助人们整理日常资料，从而提高效率。", false],
       ["缓存用来减少回源开销，先根据键查找已有结果，命中时直接返回，未命中才读取源数据。", true],
+      ["缓存用来把请求映射成键并返回已存结果，以避免每次重复读取源数据。", true],
       ["有助于减少回源，先查找已有结果，命中时返回，未命中才读取。", true],
       ["它用来提高效率，并改善人们的日常体验。", false],
     ];
-    for (const [value, accept] of operationCases) {
-      const note = withField("operation", value);
-      if (accept) expect(validateNoteText(v5OrgPath, note).ok, value).toBe(true);
-      else expect(v5ErrorsFor(note).some((error) => error.includes("operation")), value).toBe(true);
+    for (const [value] of operationCases) {
+      const result = validateNoteText(v5OrgPath, withField("operation", value));
+      expect(result.ok, value).toBe(true);
+      expect(result.review_status, value).toBe("review_required");
+      expect(result.errors.join("\n"), value).not.toContain("operation");
     }
 
     const recognitionCases: Array<[string, boolean]> = [
@@ -338,13 +355,15 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       ["理解缓存后，判断依据应当从副本是否存在转向命中时是否仍需回源。", true],
       ["判断应当从看副本是否存在转向看命中后是否回源。", true],
       ["判断缓存不能只看副本是否存在，还要看命中后是否回源。", true],
+      ["判断缓存不能再仅看副本是否存在，而要核对命中后是否回源。", true],
       ["应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。", false],
       ["这个概念不能只停留在一句深刻的体会里，它值得大家反复体会。", false],
     ];
-    for (const [value, accept] of recognitionCases) {
-      const note = withField("recognition", value);
-      if (accept) expect(validateNoteText(v5OrgPath, note).ok, value).toBe(true);
-      else expect(v5ErrorsFor(note).some((error) => error.includes("recognition")), value).toBe(true);
+    for (const [value] of recognitionCases) {
+      const result = validateNoteText(v5OrgPath, withField("recognition", value));
+      expect(result.ok, value).toBe(true);
+      expect(result.warnings.length, value).toBeGreaterThan(0);
+      expect(result.errors.join("\n"), value).not.toContain("recognition");
     }
 
     const falsifierCases: Array<[string, boolean]> = [
@@ -363,10 +382,11 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       ["当前解释以后可能需要重写，不过现在还没有具体事实。", false],
       ["若干人不同意这个说法，所以当前解释需要重写。", false],
     ];
-    for (const [value, accept] of falsifierCases) {
-      const note = withField("falsifier", value);
-      if (accept) expect(validateNoteText(v5OrgPath, note).ok, value).toBe(true);
-      else expect(v5ErrorsFor(note).some((error) => error.includes("falsifier")), value).toBe(true);
+    for (const [value] of falsifierCases) {
+      const result = validateNoteText(v5OrgPath, withField("falsifier", value));
+      expect(result.ok, value).toBe(true);
+      expect(result.warnings.join("\n"), value).toContain("falsifier");
+      expect(result.errors.join("\n"), value).not.toContain("falsifier");
     }
 
     const v4Negated = [
@@ -375,8 +395,10 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       "假如缓存命中仍需回源，当前解释并不因此推翻。",
     ];
     for (const value of v4Negated) {
-      const note = goodV4Org().replace(/^#\+falsifier:.*$/mu, `#+falsifier: ${value}`);
-      expect(errorsFor(note).some((error) => error.includes("falsifier")), value).toBe(true);
+      const result = validateNoteText(orgPath, goodV4Org().replace(/^#\+falsifier:.*$/mu, `#+falsifier: ${value}`));
+      expect(result.ok, value).toBe(true);
+      expect(result.review_required, value).toBe(true);
+      expect(result.errors.join("\n"), value).not.toContain("falsifier");
     }
     const v4Affirmative = goodV4Org().replace(
       /^#\+falsifier:.*$/mu,
@@ -420,7 +442,10 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     for (const [key, value] of narrowed) {
       const base = key === "operation" ? baseOperation : baseRecognition;
       expect(base.test(value), value).toBe(true);
-      expect(v5ErrorsFor(withField(key, value)).some((error) => error.includes(key)), value).toBe(true);
+      const result = validateNoteText(v5OrgPath, withField(key, value));
+      expect(result.ok, value).toBe(true);
+      expect(result.review_status, value).toBe("review_required");
+      expect(result.errors.join("\n"), value).not.toContain(key);
     }
 
     const recognitionAudit: Array<[string, string, string]> = [
@@ -445,7 +470,10 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       expect(validateNoteText(v5OrgPath, withField("recognition", contrast)).ok, contrast).toBe(true);
       expect(praise.includes(marker) || marker === "不是" || marker === "不再", marker).toBe(true);
       expect([...praise].length, praise).toBeGreaterThanOrEqual(18);
-      expect(v5ErrorsFor(withField("recognition", praise)).some((error) => error.includes("recognition")), praise).toBe(true);
+      const praiseResult = validateNoteText(v5OrgPath, withField("recognition", praise));
+      expect(praiseResult.ok, praise).toBe(true);
+      expect(praiseResult.review_required, praise).toBe(true);
+      expect(praiseResult.errors.join("\n"), praise).not.toContain("recognition");
     }
     const markdownContrast = goodV5Markdown().replace(
       `recognition: ${RECOGNITION}`,
@@ -573,7 +601,8 @@ describe("ValidateNote v4 narrative contract", () => {
       "#+falsifier: 如果拿掉平台对入口和派单的安排，服务仍能按原样运行，那么当前解释就需要重写。",
       "#+falsifier: 假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
     );
-    expect(errorsFor(negatedFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
+    expect(validateNoteText(orgPath, negatedFalsifier).ok).toBe(true);
+    expect(validateNoteText(orgPath, negatedFalsifier).warnings.join("\n")).toContain("需复核");
     expect(errorsFor(noFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
     expect(errorsFor(closed).some((error) => error.includes("真问题"))).toBe(true);
   });
@@ -652,5 +681,55 @@ describe("ValidateNote v3 compatibility regressions", () => {
   test("still rejects The One and the arrow contract in v3", () => {
     const note = goodV3Org().replace("从指标异化的困境逆溯", "The One 是 X -> Y；从指标异化的困境逆溯");
     expect(v3Errors(note).some((error) => error.includes("旧合同"))).toBe(true);
+  });
+});
+
+describe("ValidateNote CLI review status", () => {
+  const script = join(import.meta.dir, "ValidateNote.ts");
+
+  async function runCli(notePath: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const process = Bun.spawn(["bun", script, notePath], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+      process.exited,
+    ]);
+    return { exitCode, stdout, stderr };
+  }
+
+  test("prints review_required for a structurally valid note and does not invent a reader pass", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ljg-is-cli-"));
+    try {
+      const notePath = join(dir, "20260823T010203--理解-目标函数__is.org");
+      await writeFile(notePath, goodV5Org());
+      const result = await runCli(notePath);
+      expect(result.exitCode).toBe(0);
+      const payload = JSON.parse(result.stdout);
+      expect(payload.status).toBe("review_required");
+      expect(payload.ok).toBe(true);
+      expect(payload.review_required).toBe(true);
+      expect(payload.warnings.join("\n")).toContain("不是理解通过");
+      expect(JSON.stringify(payload)).not.toContain("NARRATIVE_PASS");
+      expect(JSON.stringify(payload)).not.toContain("UNDERSTANDING_PASS");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("exits nonzero when a required field is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ljg-is-cli-bad-"));
+    try {
+      const notePath = join(dir, "20260823T010203--理解-目标函数__is.org");
+      await writeFile(notePath, goodV5Org().replace(/^#\+operation:.*\n/mu, ""));
+      const result = await runCli(notePath);
+      expect(result.exitCode).toBe(1);
+      const payload = JSON.parse(result.stderr);
+      expect(payload.status).toBe("error");
+      expect(payload.ok).toBe(false);
+      expect(payload.review_status).toBe("structural_fail");
+      expect(payload.errors.join("\n")).toContain("operation");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

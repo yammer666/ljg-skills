@@ -4,9 +4,14 @@ import { basename } from "node:path";
 
 export type NoteSchema = "legacy" | "ljg-is-v2" | "ljg-is-v3" | "ljg-is-v4" | "ljg-is-v5";
 
+export type ReviewStatus = "structural_fail" | "review_required" | "structural_checks_only";
+
 export type ValidationResult = {
   ok: boolean;
   errors: string[];
+  warnings: string[];
+  review_required: boolean;
+  review_status: ReviewStatus;
   identifier?: string;
   schema?: NoteSchema;
   definition?: string;
@@ -139,54 +144,11 @@ type V5Fields = {
   guidance?: string;
 };
 
-const PROCESS_VERB = /(?:输入|输出|读入|写入|读取|接收|收下|交出|交回|交还|映射|比较|对照|选择|筛选|过滤|计算|运算|组织|归并|连接|衔接|限制|约束|决定|判定|调整|保留|留下|排除|去掉|生成|改变|转换|转化|触发|驱动|查找|检索|匹配|收窄|展开|执行|运行|调用|返回|分解|拆成|拆开|合并|命中)/u;
-const LOOSE_VERB = /(?:作用|处理|把|将|让|使|通过|经由|借助|凭借|根据|按照|依照)/u;
-const PRIOR_JUDGMENT = /(?:原来|原先|原本|本来|此前|以往|以为|误以为|看成|当作|当成|当做)/u;
-const CORRECTION = /(?:改成|改为|修正|纠正|不再|不能只|不能再|关键不在|(?<!只)不是|并非)/u;
-const DIRECT_CORRECTION = /(?:(?<!只)不是|并非|(?<!能)不再)/u;
-const FALSIFIER_CONDITION = /(?:如果|若(?!干)|假如|倘若|要是|一旦|假使|倘使|要不是)/u;
-const FALSIFIER_FAILURE = /站不住|不再成立|不再适用|不能再用|不成立/gu;
-const FALSIFIER_REVISION = /失效|重写|改写|推翻|推倒|需要改|得改|必须改|就要改|便要改/gu;
-const NEGATED_PREDICATE = /(?:并不会|不会|并不|不用|不必|不需要|无需|没有|并未|绝不|不是|不能|不可|不得|别|没|未|不)(?:因此|因而|从而|所以|就此|就|才|还|仍然|依然|仍|也|并|都|再|马上|立刻|必然|一定|真的|其实)*$/u;
-const OBLIGATORY_REVISION = /不得不(?:因此|因而|从而|所以|就此|就|才|还|仍然|依然|仍|也|并|都|再|马上|立刻|必然|一定|真的|其实)*$/u;
+const SEMANTIC_REVIEW_WARNING = "需复核：operation 是否写清机制、recognition 是否写出判断变化、falsifier 是否真会推翻解释，均不由关键词判定。结构通过不是理解通过，不得自动记为读者通过。";
 
-function operationRecordsMechanism(operation: string): boolean {
-  // A purpose marker covers only the clause up to the next comma. Later clauses can still carry the process.
-  const outsidePurpose = operation.replace(/(?:用途是|用来|用于帮助|有助于|可以帮助)[^。；，,\n]*/gu, "");
-  if (PROCESS_VERB.test(outsidePurpose)) return true;
-  if (/(?:用途是|用来|用于帮助|有助于|可以帮助)/u.test(operation)) return false;
-  return LOOSE_VERB.test(operation);
-}
-
-function recognitionHasContrast(recognition: string): boolean {
-  const corrects = CORRECTION.test(recognition);
-  if (PRIOR_JUDGMENT.test(recognition) && corrects) return true;
-  if (DIRECT_CORRECTION.test(recognition)) return true;
-  // Two named judgments. A bare 应当从, 不能只, or 关键不在 is not enough.
-  return /从[^，。；,\n]{1,48}(?:转向|改为|改变为)/u.test(recognition)
-    || /不能只[^。；\n]{1,48}还要/u.test(recognition)
-    || /关键不在[^。；\n]{1,48}而在/u.test(recognition);
-}
-
-function overturnIsNegated(before: string): boolean {
-  if (OBLIGATORY_REVISION.test(before)) return false;
-  return NEGATED_PREDICATE.test(before);
-}
-
-function hasAffirmativeOverturn(falsifier: string): boolean {
-  for (const pattern of [FALSIFIER_FAILURE, FALSIFIER_REVISION]) {
-    for (const match of falsifier.matchAll(pattern)) {
-      const at = match.index ?? 0;
-      const before = falsifier.slice(Math.max(0, at - 12), at);
-      if (overturnIsNegated(before)) continue;
-      return true;
-    }
-  }
-  return false;
-}
-
-function falsifierStatesCounterfactual(falsifier: string): boolean {
-  return FALSIFIER_CONDITION.test(falsifier) && hasAffirmativeOverturn(falsifier);
+function withinLength(value: string, min: number, max: number): boolean {
+  const length = [...value].length;
+  return length >= min && length <= max;
 }
 
 function validateV5(
@@ -198,6 +160,7 @@ function validateV5(
   tags: string[],
   headings: string[],
   errors: string[],
+  warnings: string[],
 ): V5Fields {
   const fileMatch = fileName.match(/^(\d{8}T\d{6})--理解-(.+)__is\.(org|md)$/u);
   if (!fileMatch || !fileMatch[2]?.trim()) {
@@ -251,15 +214,15 @@ function validateV5(
   const operation = metadataValue(content, "operation", format);
   if (!operation) {
     errors.push("v5 必须用 operation 元数据记录 X 怎样起作用");
-  } else if ([...operation].length < 18 || [...operation].length > 200 || !operationRecordsMechanism(operation)) {
-    errors.push("v5 operation 要说清关键动作以及什么因此改变，不能只重复用途或影响");
+  } else if (!withinLength(operation, 18, 200)) {
+    errors.push("v5 operation 长度必须在 18 到 200 字");
   }
 
   const recognition = metadataValue(content, "recognition", format);
   if (!recognition) {
     errors.push("v5 必须用 recognition 元数据记录这番理解修正了哪种旧判断");
-  } else if ([...recognition].length < 18 || [...recognition].length > 200 || !recognitionHasContrast(recognition)) {
-    errors.push("v5 recognition 要写出理解前后的判断差别，不能另起一句抽象感想");
+  } else if (!withinLength(recognition, 18, 200)) {
+    errors.push("v5 recognition 长度必须在 18 到 200 字");
   }
 
   const guidance = metadataValue(content, "guidance", format);
@@ -281,9 +244,8 @@ function validateV5(
   const falsifier = metadataValue(content, "falsifier", format);
   if (!falsifier) {
     errors.push("v5 必须用 falsifier 元数据记录什么事实会推翻当前解释");
-  } else if (!falsifierStatesCounterfactual(falsifier)) {
-    errors.push("v5 falsifier 必须明确写出在什么事实下当前解释会不成立或需要重写");
   }
+  warnings.push(SEMANTIC_REVIEW_WARNING);
 
   const semicolons = visibleBody.match(/；/gu)?.length ?? 0;
   const listCommas = visibleBody.match(/、/gu)?.length ?? 0;
@@ -310,6 +272,7 @@ function validateV4(
   tags: string[],
   headings: string[],
   errors: string[],
+  warnings: string[],
 ): string | undefined {
   const fileMatch = fileName.match(/^(\d{8}T\d{6})--动词-(.+)__is\.(org|md)$/u);
   if (!fileMatch || !fileMatch[2]?.trim()) {
@@ -374,9 +337,8 @@ function validateV4(
   const falsifier = metadataValue(content, "falsifier", format);
   if (!falsifier) {
     errors.push("v4 必须用 falsifier 元数据记录什么事实会推翻当前解释");
-  } else if (!falsifierStatesCounterfactual(falsifier)) {
-    errors.push("v4 falsifier 必须明确写出在什么事实下当前解释会不成立或需要重写");
   }
+  warnings.push(SEMANTIC_REVIEW_WARNING);
 
   const semicolons = visibleBody.match(/；/gu)?.length ?? 0;
   const listCommas = visibleBody.match(/、/gu)?.length ?? 0;
@@ -528,6 +490,7 @@ function validateLegacy(
 
 export function validateNoteText(filePath: string, content: string): ValidationResult {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const fileName = basename(filePath);
   const extension = fileName.match(/\.(org|md)$/u)?.[1] as NoteFormat | undefined;
   const format = extension ?? "org";
@@ -566,20 +529,39 @@ export function validateNoteText(filePath: string, content: string): ValidationR
   let action: string | undefined;
   let core: string | undefined;
   if (schema === V5_SCHEMA) {
-    ({ definition, operation, recognition, guidance } = validateV5(fileName, content, format, identifier, title, tags, headings, errors));
+    ({ definition, operation, recognition, guidance } = validateV5(fileName, content, format, identifier, title, tags, headings, errors, warnings));
   } else if (schema === V4_SCHEMA) {
-    action = validateV4(fileName, content, format, identifier, title, tags, headings, errors);
+    action = validateV4(fileName, content, format, identifier, title, tags, headings, errors, warnings);
   } else if (schema === V3_SCHEMA) {
     action = validateV3(fileName, content, format, identifier, title, tags, headings, errors);
   } else if (schema) {
     core = validateLegacy(fileName, content, format, schema, identifier, title, tags, headings, errors);
   }
-  return { ok: errors.length === 0, errors, identifier, schema, definition, operation, recognition, guidance, action, core };
+  const ok = errors.length === 0;
+  const reviewRequired = schema === V4_SCHEMA || schema === V5_SCHEMA;
+  const review_status: ReviewStatus = !ok ? "structural_fail" : reviewRequired ? "review_required" : "structural_checks_only";
+  return {
+    ok,
+    errors,
+    warnings,
+    review_required: reviewRequired,
+    review_status,
+    identifier,
+    schema,
+    definition,
+    operation,
+    recognition,
+    guidance,
+    action,
+    core,
+  };
 }
 
 export async function validateNoteFile(filePath: string): Promise<ValidationResult> {
   const file = Bun.file(filePath);
-  if (!(await file.exists())) return { ok: false, errors: [`文件不存在：${filePath}`] };
+  if (!(await file.exists())) {
+    return { ok: false, errors: [`文件不存在：${filePath}`], warnings: [], review_required: false, review_status: "structural_fail" };
+  }
   return validateNoteText(filePath, await file.text());
 }
 
@@ -587,17 +569,19 @@ if (import.meta.main) {
   const filePath = Bun.argv[2];
   if (filePath === "--help" || filePath === "-h") {
     console.log("用法：bun ValidateNote.ts <note-file>");
-    console.log("校验 ljg-is-v5 可使用理解笔记，并兼容读取 ljg-is-v4、ljg-is-v3、ljg-is-v2 与 legacy 笔记。");
+    console.log("结构、缺字段和合同版本仍会失败。v4/v5 的机制、判断变化和推翻条件只给出复核警告，结构通过不是理解通过。");
     process.exit(0);
   }
   if (!filePath) {
-    console.error(JSON.stringify({ status: "error", errors: ["用法：bun ValidateNote.ts <note-file>"] }));
+    console.error(JSON.stringify({ status: "error", errors: ["用法：bun ValidateNote.ts <note-file>"], warnings: [], review_required: false, review_status: "structural_fail" }));
     process.exit(2);
   }
   const result = await validateNoteFile(filePath);
+  const status = !result.ok ? "error" : result.review_status;
+  const payload = { status, path: filePath, ...result };
   if (!result.ok) {
-    console.error(JSON.stringify({ status: "error", ...result }, null, 2));
+    console.error(JSON.stringify(payload, null, 2));
     process.exit(1);
   }
-  console.log(JSON.stringify({ status: "ok", path: filePath, ...result }, null, 2));
+  console.log(JSON.stringify(payload, null, 2));
 }
