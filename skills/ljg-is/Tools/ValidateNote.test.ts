@@ -314,6 +314,9 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       ["它的用途是帮助人们提高效率并改善日常体验。", false],
       ["它通过提高效率来发挥作用，用途是帮助人们改善体验。", false],
       ["它用来帮助人们整理日常资料，从而提高效率。", false],
+      ["缓存用来减少回源开销，先根据键查找已有结果，命中时直接返回，未命中才读取源数据。", true],
+      ["有助于减少回源，先查找已有结果，命中时返回，未命中才读取。", true],
+      ["它用来提高效率，并改善人们的日常体验。", false],
     ];
     for (const [value, accept] of operationCases) {
       const note = withField("operation", value);
@@ -332,6 +335,9 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       ["这个概念很深刻，让人感到启发，值得反复体会。", false],
       ["其实这个概念给人一种深刻的启发，值得继续体会其中的意味。", false],
       ["这个概念不只是非常深刻，而且很有启发，值得反复体会。", false],
+      ["理解缓存后，判断依据应当从副本是否存在转向命中时是否仍需回源。", true],
+      ["判断应当从看副本是否存在转向看命中后是否回源。", true],
+      ["应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。", false],
     ];
     for (const [value, accept] of recognitionCases) {
       const note = withField("recognition", value);
@@ -375,6 +381,45 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       "#+falsifier: 假如命中仍要回源，当前解释因此失效。",
     );
     expect(validateNoteText(orgPath, v4Affirmative).ok).toBe(true);
+  });
+
+  test("keeps base-accepted mechanisms and explicit transitions, and records the semantic narrowing", () => {
+    const withField = (key: string, value: string) => goodV5Org().replace(new RegExp(`^#\\+${key}:.*$`, "mu"), `#+${key}: ${value}`);
+    const baseOperation = /(?:输入|输出|映射|比较|选择|计算|组织|连接|限制|决定|调整|保留|排除|生成|改变|作用|把|将|让|使|通过|根据|按照)/u;
+    const baseRecognition = /(?:不是|不再|原来|以为|意味着|这使|改变|不能只|不能再|应当从|关键不在|关键在|真正)/u;
+    const retainedOperation = [
+      "它把每个候选方案映射成一个值，求解过程据此保留更优方案，直到不能继续改进或达到停止条件。",
+      "缓存用来减少回源开销，先根据键查找已有结果，命中时直接返回，未命中才读取源数据。",
+      "它通过比较保留更优方案，直到不能继续改进或停止。",
+      "求解过程根据目标值选择方案，并保留不能继续改进之前的结果。",
+    ];
+    for (const value of retainedOperation) {
+      expect(baseOperation.test(value), value).toBe(true);
+      expect([...value].length, value).toBeGreaterThanOrEqual(18);
+      expect(validateNoteText(v5OrgPath, withField("operation", value)).ok, value).toBe(true);
+    }
+    const retainedRecognition = [
+      "优化不是先有方向再做计算，目标函数本身就在规定什么变化会被系统当成进步。",
+      "理解缓存后，判断依据应当从副本是否存在转向命中时是否仍需回源。",
+      "判断应当从看副本是否存在转向看命中后是否回源。",
+      "人们不再把命中当成源头已经更新的证据。",
+    ];
+    for (const value of retainedRecognition) {
+      expect(baseRecognition.test(value), value).toBe(true);
+      expect([...value].length, value).toBeGreaterThanOrEqual(18);
+      expect(validateNoteText(v5OrgPath, withField("recognition", value)).ok, value).toBe(true);
+    }
+    const narrowed: Array<[string, string]> = [
+      ["operation", "它的用途是通过提高效率来改善人们的日常体验。"],
+      ["recognition", "应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。"],
+      ["recognition", "这意味着缓存很有启发，值得反复体会其中的意味。"],
+      ["recognition", "这个概念真正非常深刻，值得大家反复体会其中的意味。"],
+    ];
+    for (const [key, value] of narrowed) {
+      const base = key === "operation" ? baseOperation : baseRecognition;
+      expect(base.test(value), value).toBe(true);
+      expect(v5ErrorsFor(withField(key, value)).some((error) => error.includes(key)), value).toBe(true);
+    }
   });
 
   test("does not require a protagonist, forced back-action or question ending", () => {

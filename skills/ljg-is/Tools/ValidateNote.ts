@@ -151,7 +151,8 @@ const NEGATED_PREDICATE = /(?:并不会|不会|并不|不用|不必|不需要|�
 const OBLIGATORY_REVISION = /不得不(?:因此|因而|从而|所以|就此|就|才|还|仍然|依然|仍|也|并|都|再|马上|立刻|必然|一定|真的|其实)*$/u;
 
 function operationRecordsMechanism(operation: string): boolean {
-  const outsidePurpose = operation.replace(/(?:用途是|用来|用于帮助|有助于|可以帮助)[^。；\n]*/gu, "");
+  // A purpose marker covers only the clause up to the next comma. Later clauses can still carry the process.
+  const outsidePurpose = operation.replace(/(?:用途是|用来|用于帮助|有助于|可以帮助)[^。；，,\n]*/gu, "");
   if (PROCESS_VERB.test(outsidePurpose)) return true;
   if (/(?:用途是|用来|用于帮助|有助于|可以帮助)/u.test(operation)) return false;
   return LOOSE_VERB.test(operation);
@@ -160,7 +161,9 @@ function operationRecordsMechanism(operation: string): boolean {
 function recognitionHasContrast(recognition: string): boolean {
   const corrects = CORRECTION.test(recognition);
   if (PRIOR_JUDGMENT.test(recognition) && corrects) return true;
-  return DIRECT_CORRECTION.test(recognition);
+  if (DIRECT_CORRECTION.test(recognition)) return true;
+  // Two named judgments: 从 A 转向 B. A bare 应当从 without 转向 is not this shape.
+  return /从[^，。；,\n]{1,48}转向/u.test(recognition);
 }
 
 function overturnIsNegated(before: string): boolean {
