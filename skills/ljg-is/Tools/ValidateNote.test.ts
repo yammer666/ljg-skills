@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { validateNoteText } from "./ValidateNote";
 
 const v5OrgPath = "/tmp/20260823T010203--理解-目标函数__is.org";
@@ -209,10 +212,24 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     expect(result.schema).toBe("ljg-is-v5");
     expect(result.definition).toBe(DEFINITION);
     expect(result.operation).toBe(OPERATION);
+    expect(result.review_required).toBe(true);
+    expect(result.review_status).toBe("review_required");
+    expect(result.warnings.join("\n")).toContain("不是理解通过");
+    expect(result.errors).toEqual([]);
   });
 
   test("accepts a complete v5 Markdown note", () => {
     expect(validateNoteText(v5MdPath, goodV5Markdown()).ok).toBe(true);
+  });
+
+  test("rejects a blank or too-short operation without treating that as a semantic keyword failure", () => {
+    const blank = goodV5Org().replace(/^#\+operation:.*\n/mu, "");
+    const short = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 只写半句。");
+    expect(v5ErrorsFor(blank).some((error) => error.includes("operation"))).toBe(true);
+    expect(validateNoteText(v5OrgPath, blank).ok).toBe(false);
+    expect(validateNoteText(v5OrgPath, blank).review_status).toBe("structural_fail");
+    expect(v5ErrorsFor(short).some((error) => error.includes("长度"))).toBe(true);
+    expect(validateNoteText(v5OrgPath, short).ok).toBe(false);
   });
 
   test("requires definition, operation, recognition and guidance", () => {
@@ -234,6 +251,235 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     const label = goodV5Org().replace("看到「寻找最优解」", "定义：目标函数是一把尺子。\n\n看到「寻找最优解」");
     expect(v5ErrorsFor(heading).some((error) => error.includes("标题"))).toBe(true);
     expect(v5ErrorsFor(label).some((error) => error.includes("字段标签"))).toBe(true);
+  });
+
+  test("accepts natural operation, recognition, and falsifier wording in Org and Markdown", () => {
+    const operation = "缓存先收下请求，再按键查找已有结果；命中时直接交回已存内容，未命中才回到源头读取。";
+    const recognition = "人们原先把缓存看成总会更新的副本，读过读写路径以后会改成：它只在命中时省掉一次取数。";
+    const falsifier = "假如缓存命中时仍然每次都回到源头读取整份数据，这套解释就失效了。";
+    const org = goodV5Org()
+      .replace(`#+operation: ${OPERATION}`, `#+operation: ${operation}`)
+      .replace(`#+recognition: ${RECOGNITION}`, `#+recognition: ${recognition}`)
+      .replace("#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。", `#+falsifier: ${falsifier}`);
+    const markdown = goodV5Markdown()
+      .replace(`operation: ${OPERATION}`, `operation: ${operation}`)
+      .replace(`recognition: ${RECOGNITION}`, `recognition: ${recognition}`)
+      .replace("falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。", `falsifier: ${falsifier}`);
+    expect(validateNoteText(v5OrgPath, org).ok).toBe(true);
+    expect(validateNoteText(v5MdPath, markdown).ok).toBe(true);
+    const reversed = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 当前解释就得改写，假如命中时仍要回源读取整份数据。",
+    );
+    expect(validateNoteText(v5OrgPath, reversed).ok).toBe(true);
+    const contrastiveExplanation = goodV5Org().replace(
+      `#+recognition: ${RECOGNITION}`,
+      "#+recognition: 这说明人们原先把缓存看成总会更新的副本，读过路径以后会改成只在命中时省掉取数。",
+    );
+    expect(validateNoteText(v5OrgPath, contrastiveExplanation).ok).toBe(true);
+  });
+
+  test("warns on purpose-only, abstract, and negated wording instead of rejecting it", () => {
+    const purpose = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 它的用途是帮助人们提高效率并改善日常体验。");
+    const slogan = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 它通过提高效率来发挥作用，用途是帮助人们改善体验。");
+    const abstract = goodV5Org().replace(`#+recognition: ${RECOGNITION}`, "#+recognition: 这个概念很深刻，让人感到启发，值得反复体会。");
+    const bareActually = goodV5Org().replace(`#+recognition: ${RECOGNITION}`, "#+recognition: 其实这个概念给人一种深刻的启发，值得继续体会其中的意味。");
+    const noCondition = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 当前解释以后可能需要重写，不过现在还没有具体事实。",
+    );
+    const noOverturn = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 如果大家以后更加努力，整体结果就会变得更好。",
+    );
+    const several = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 若干人不同意这个说法，所以当前解释需要重写。",
+    );
+    const arrangePurpose = goodV5Org().replace(
+      `#+operation: ${OPERATION}`,
+      "#+operation: 它的用途是帮助人们整理日常资料、提高效率并改善体验。",
+    );
+    const explainsAbstract = goodV5Org().replace(
+      `#+recognition: ${RECOGNITION}`,
+      "#+recognition: 这说明这个概念非常深刻，给人很大启发，值得反复体会。",
+    );
+    const negatedFalsifier = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
+    );
+    for (const note of [purpose, slogan, arrangePurpose, abstract, bareActually, explainsAbstract, noCondition, noOverturn, several, negatedFalsifier]) {
+      const result = validateNoteText(v5OrgPath, note);
+      expect(result.ok, note).toBe(true);
+      expect(result.review_required, note).toBe(true);
+      expect(result.review_status, note).toBe("review_required");
+      expect(result.warnings.join("\n"), note).toContain("需复核");
+      expect(result.errors.join("\n"), note).not.toMatch(/operation|recognition|falsifier/);
+    }
+  });
+
+  test("judges mechanism, judgment contrast, and affirmative falsification by clause shape", () => {
+    const withField = (key: string, value: string) => goodV5Org().replace(new RegExp(`^#\\+${key}:.*$`, "mu"), `#+${key}: ${value}`);
+    const operationCases: Array<[string, boolean]> = [
+      ["缓存先按键查找已有结果，命中时直接返回，未命中才回源读取，从而提高效率。", true],
+      ["缓存先收下请求，再按键查找已有结果；命中时直接交回已存内容，未命中才回到源头读取。", true],
+      ["缓存先按键查找已有结果，命中时直接返回；它的用途是提高效率。", true],
+      ["它把重复读取映射成一次命中，未命中才回源，从而提高效率并改善体验。", true],
+      ["它的用途是帮助人们整理日常资料、提高效率并改善体验。", false],
+      ["它的用途是帮助人们提高效率并改善日常体验。", false],
+      ["它通过提高效率来发挥作用，用途是帮助人们改善体验。", false],
+      ["它用来帮助人们整理日常资料，从而提高效率。", false],
+      ["缓存用来减少回源开销，先根据键查找已有结果，命中时直接返回，未命中才读取源数据。", true],
+      ["缓存用来把请求映射成键并返回已存结果，以避免每次重复读取源数据。", true],
+      ["有助于减少回源，先查找已有结果，命中时返回，未命中才读取。", true],
+      ["它用来提高效率，并改善人们的日常体验。", false],
+    ];
+    for (const [value] of operationCases) {
+      const result = validateNoteText(v5OrgPath, withField("operation", value));
+      expect(result.ok, value).toBe(true);
+      expect(result.review_status, value).toBe("review_required");
+      expect(result.errors.join("\n"), value).not.toContain("operation");
+    }
+
+    const recognitionCases: Array<[string, boolean]> = [
+      ["优化不是先有方向再做计算，目标函数本身就在规定什么变化会被系统当成进步。", true],
+      ["人们原先把缓存看成总会更新的副本，读过读写路径以后会改成：它只在命中时省掉一次取数。", true],
+      ["这说明人们原先把缓存看成总会更新的副本，之后会改成只在命中时省事。", true],
+      ["优化不是先有方向再做计算，而是先有一把可比较的尺子。", true],
+      ["人们不再把命中当成源头已经更新的证据。", true],
+      ["这个概念不只非常深刻，而且很有启发，值得大家反复体会其中的意味。", false],
+      ["这说明这个概念非常深刻，给人很大启发，值得反复体会。", false],
+      ["这个概念很深刻，让人感到启发，值得反复体会。", false],
+      ["其实这个概念给人一种深刻的启发，值得继续体会其中的意味。", false],
+      ["这个概念不只是非常深刻，而且很有启发，值得反复体会。", false],
+      ["理解缓存后，判断依据应当从副本是否存在转向命中时是否仍需回源。", true],
+      ["判断应当从看副本是否存在转向看命中后是否回源。", true],
+      ["判断缓存不能只看副本是否存在，还要看命中后是否回源。", true],
+      ["判断缓存不能再仅看副本是否存在，而要核对命中后是否回源。", true],
+      ["应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。", false],
+      ["这个概念不能只停留在一句深刻的体会里，它值得大家反复体会。", false],
+    ];
+    for (const [value] of recognitionCases) {
+      const result = validateNoteText(v5OrgPath, withField("recognition", value));
+      expect(result.ok, value).toBe(true);
+      expect(result.warnings.length, value).toBeGreaterThan(0);
+      expect(result.errors.join("\n"), value).not.toContain("recognition");
+    }
+
+    const falsifierCases: Array<[string, boolean]> = [
+      ["假如缓存命中时仍然每次都回到源头读取整份数据，这套解释就失效了。", true],
+      ["如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。", true],
+      ["若比较所用的值和实际选择无关，那么当前解释就不成立。", true],
+      ["当前解释就得改写，假如命中时仍要回源读取整份数据。", true],
+      ["假如命中仍要回源，当前解释因此失效。", true],
+      ["假如命中仍要回源，当前解释不得不改写。", true],
+      ["假如缓存命中仍需回源，当前解释不会因此失效。", false],
+      ["假如缓存命中仍需回源，当前解释不会因此就失效。", false],
+      ["假如缓存命中仍需回源，当前解释依然成立，不需要改写。", false],
+      ["假如缓存命中仍需回源，当前解释并不会失效。", false],
+      ["假如缓存命中仍需回源，当前解释并不因此推翻。", false],
+      ["如果大家以后更加努力，整体结果就会变得更好。", false],
+      ["当前解释以后可能需要重写，不过现在还没有具体事实。", false],
+      ["若干人不同意这个说法，所以当前解释需要重写。", false],
+    ];
+    for (const [value] of falsifierCases) {
+      const result = validateNoteText(v5OrgPath, withField("falsifier", value));
+      expect(result.ok, value).toBe(true);
+      expect(result.warnings.join("\n"), value).toContain("falsifier");
+      expect(result.errors.join("\n"), value).not.toContain("falsifier");
+    }
+
+    const v4Negated = [
+      "假如缓存命中仍需回源，当前解释不会因此失效。",
+      "假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
+      "假如缓存命中仍需回源，当前解释并不因此推翻。",
+    ];
+    for (const value of v4Negated) {
+      const result = validateNoteText(orgPath, goodV4Org().replace(/^#\+falsifier:.*$/mu, `#+falsifier: ${value}`));
+      expect(result.ok, value).toBe(true);
+      expect(result.review_required, value).toBe(true);
+      expect(result.errors.join("\n"), value).not.toContain("falsifier");
+    }
+    const v4Affirmative = goodV4Org().replace(
+      /^#\+falsifier:.*$/mu,
+      "#+falsifier: 假如命中仍要回源，当前解释因此失效。",
+    );
+    expect(validateNoteText(orgPath, v4Affirmative).ok).toBe(true);
+  });
+
+  test("keeps base-accepted mechanisms and explicit transitions, and records the semantic narrowing", () => {
+    const withField = (key: string, value: string) => goodV5Org().replace(new RegExp(`^#\\+${key}:.*$`, "mu"), `#+${key}: ${value}`);
+    const baseOperation = /(?:输入|输出|映射|比较|选择|计算|组织|连接|限制|决定|调整|保留|排除|生成|改变|作用|把|将|让|使|通过|根据|按照)/u;
+    const baseRecognition = /(?:不是|不再|原来|以为|意味着|这使|改变|不能只|不能再|应当从|关键不在|关键在|真正)/u;
+    const retainedOperation = [
+      "它把每个候选方案映射成一个值，求解过程据此保留更优方案，直到不能继续改进或达到停止条件。",
+      "缓存用来减少回源开销，先根据键查找已有结果，命中时直接返回，未命中才读取源数据。",
+      "它通过比较保留更优方案，直到不能继续改进或停止。",
+      "求解过程根据目标值选择方案，并保留不能继续改进之前的结果。",
+    ];
+    for (const value of retainedOperation) {
+      expect(baseOperation.test(value), value).toBe(true);
+      expect([...value].length, value).toBeGreaterThanOrEqual(18);
+      expect(validateNoteText(v5OrgPath, withField("operation", value)).ok, value).toBe(true);
+    }
+    const retainedRecognition = [
+      "优化不是先有方向再做计算，目标函数本身就在规定什么变化会被系统当成进步。",
+      "理解缓存后，判断依据应当从副本是否存在转向命中时是否仍需回源。",
+      "判断应当从看副本是否存在转向看命中后是否回源。",
+      "人们不再把命中当成源头已经更新的证据。",
+    ];
+    for (const value of retainedRecognition) {
+      expect(baseRecognition.test(value), value).toBe(true);
+      expect([...value].length, value).toBeGreaterThanOrEqual(18);
+      expect(validateNoteText(v5OrgPath, withField("recognition", value)).ok, value).toBe(true);
+    }
+    const narrowed: Array<[string, string]> = [
+      ["operation", "它的用途是通过提高效率来改善人们的日常体验。"],
+      ["recognition", "应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。"],
+      ["recognition", "这意味着缓存很有启发，值得反复体会其中的意味。"],
+      ["recognition", "这个概念真正非常深刻，值得大家反复体会其中的意味。"],
+    ];
+    for (const [key, value] of narrowed) {
+      const base = key === "operation" ? baseOperation : baseRecognition;
+      expect(base.test(value), value).toBe(true);
+      const result = validateNoteText(v5OrgPath, withField(key, value));
+      expect(result.ok, value).toBe(true);
+      expect(result.review_status, value).toBe("review_required");
+      expect(result.errors.join("\n"), value).not.toContain(key);
+    }
+
+    const recognitionAudit: Array<[string, string, string]> = [
+      ["不是", "优化不是只看副本是否存在，而是看命中后是否回源。", "这个概念很深刻，值得反复体会其中的意味。"],
+      ["不再", "人们不再把命中当成源头已经更新的证据。", "这个概念很深刻，值得反复体会其中的意味。"],
+      ["原来", "原来以为副本是否存在就够了，现在改成要看命中后是否回源。", "原来这个概念非常深刻，值得反复体会其中的意味。"],
+      ["以为", "人们以为只看副本是否存在，而不是看命中后是否回源。", "我以为这个概念非常深刻，值得反复体会其中的意味。"],
+      ["意味着", "这意味着判断不能只看副本是否存在，还要看命中后是否回源。", "这意味着缓存很有启发，值得反复体会其中的意味。"],
+      ["这使", "这使判断从看副本是否存在转向看命中后是否回源。", "这使这个概念更加深刻，值得反复体会其中的意味。"],
+      ["改变", "判断依据从副本是否存在改变为命中后是否仍需回源。", "这改变了感受，这个概念非常深刻，值得反复体会。"],
+      ["不能只", "判断缓存不能只看副本是否存在，还要看命中后是否回源。", "这个概念不能只停留在一句深刻的体会里，它值得大家反复体会。"],
+      ["不能再", "不能再把副本是否存在当成充分判断，而要看命中后是否回源。", "这个概念不能再被低估，它非常深刻，值得反复体会。"],
+      ["应当从", "判断依据应当从副本是否存在转向命中时是否仍需回源。", "应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。"],
+      ["关键不在", "关键不在副本是否存在，而在命中后是否仍需回源。", "关键不在表面感受，这个概念非常深刻，值得反复体会。"],
+      ["关键在", "关键在命中后是否回源，而不是副本是否存在。", "关键在于这个概念非常深刻，值得大家反复体会其中的意味。"],
+      ["真正", "真正要改的判断不是副本是否存在，而是命中后是否回源。", "这个概念真正非常深刻，值得大家反复体会其中的意味。"],
+    ];
+    for (const [marker, contrast, praise] of recognitionAudit) {
+      expect(baseRecognition.test(contrast), marker).toBe(true);
+      expect(contrast.includes(marker), marker).toBe(true);
+      expect([...contrast].length, contrast).toBeGreaterThanOrEqual(18);
+      expect(validateNoteText(v5OrgPath, withField("recognition", contrast)).ok, contrast).toBe(true);
+      expect(praise.includes(marker) || marker === "不是" || marker === "不再", marker).toBe(true);
+      expect([...praise].length, praise).toBeGreaterThanOrEqual(18);
+      const praiseResult = validateNoteText(v5OrgPath, withField("recognition", praise));
+      expect(praiseResult.ok, praise).toBe(true);
+      expect(praiseResult.review_required, praise).toBe(true);
+      expect(praiseResult.errors.join("\n"), praise).not.toContain("recognition");
+    }
+    const markdownContrast = goodV5Markdown().replace(
+      `recognition: ${RECOGNITION}`,
+      "recognition: 判断缓存不能只看副本是否存在，还要看命中后是否回源。",
+    );
+    expect(validateNoteText(v5MdPath, markdownContrast).ok).toBe(true);
   });
 
   test("does not require a protagonist, forced back-action or question ending", () => {
@@ -346,6 +592,17 @@ describe("ValidateNote v4 narrative contract", () => {
     const noFalsifier = goodV4Org().replace(/^#\+falsifier: .+\n/mu, "");
     const closed = goodV4Org().replace("到底谁有权修改维持它的规则？", "这些规则最终会得到妥善解决。");
     expect(validateNoteText(orgPath, natural).ok).toBe(true);
+    const naturalCondition = goodV4Org().replace(
+      "#+falsifier: 如果拿掉平台对入口和派单的安排，服务仍能按原样运行，那么当前解释就需要重写。",
+      "#+falsifier: 假如司机和乘客事实上共同掌握全部关键规则，这套解释就失效了。",
+    );
+    expect(validateNoteText(orgPath, naturalCondition).ok).toBe(true);
+    const negatedFalsifier = goodV4Org().replace(
+      "#+falsifier: 如果拿掉平台对入口和派单的安排，服务仍能按原样运行，那么当前解释就需要重写。",
+      "#+falsifier: 假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
+    );
+    expect(validateNoteText(orgPath, negatedFalsifier).ok).toBe(true);
+    expect(validateNoteText(orgPath, negatedFalsifier).warnings.join("\n")).toContain("需复核");
     expect(errorsFor(noFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
     expect(errorsFor(closed).some((error) => error.includes("真问题"))).toBe(true);
   });
@@ -424,5 +681,55 @@ describe("ValidateNote v3 compatibility regressions", () => {
   test("still rejects The One and the arrow contract in v3", () => {
     const note = goodV3Org().replace("从指标异化的困境逆溯", "The One 是 X -> Y；从指标异化的困境逆溯");
     expect(v3Errors(note).some((error) => error.includes("旧合同"))).toBe(true);
+  });
+});
+
+describe("ValidateNote CLI review status", () => {
+  const script = join(import.meta.dir, "ValidateNote.ts");
+
+  async function runCli(notePath: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const process = Bun.spawn(["bun", script, notePath], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+      process.exited,
+    ]);
+    return { exitCode, stdout, stderr };
+  }
+
+  test("prints review_required for a structurally valid note and does not invent a reader pass", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ljg-is-cli-"));
+    try {
+      const notePath = join(dir, "20260823T010203--理解-目标函数__is.org");
+      await writeFile(notePath, goodV5Org());
+      const result = await runCli(notePath);
+      expect(result.exitCode).toBe(0);
+      const payload = JSON.parse(result.stdout);
+      expect(payload.status).toBe("review_required");
+      expect(payload.ok).toBe(true);
+      expect(payload.review_required).toBe(true);
+      expect(payload.warnings.join("\n")).toContain("不是理解通过");
+      expect(JSON.stringify(payload)).not.toContain("NARRATIVE_PASS");
+      expect(JSON.stringify(payload)).not.toContain("UNDERSTANDING_PASS");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("exits nonzero when a required field is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ljg-is-cli-bad-"));
+    try {
+      const notePath = join(dir, "20260823T010203--理解-目标函数__is.org");
+      await writeFile(notePath, goodV5Org().replace(/^#\+operation:.*\n/mu, ""));
+      const result = await runCli(notePath);
+      expect(result.exitCode).toBe(1);
+      const payload = JSON.parse(result.stderr);
+      expect(payload.status).toBe("error");
+      expect(payload.ok).toBe(false);
+      expect(payload.review_status).toBe("structural_fail");
+      expect(payload.errors.join("\n")).toContain("operation");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

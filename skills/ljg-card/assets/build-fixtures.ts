@@ -335,6 +335,9 @@ const whiteboardSourceHash = sha256(new TextEncoder().encode(whiteboardSource));
 const whiteboardSourcePath = join(output, "whiteboard-source.txt");
 const whiteboardSourceInventoryPath = join(output, "whiteboard-source-inventory.json");
 await Bun.write(whiteboardSourcePath, whiteboardSource);
+await unlink(whiteboardSourceInventoryPath).catch((error: NodeJS.ErrnoException) => {
+  if (error?.code !== "ENOENT") throw error;
+});
 await run([
   "bun",
   join(root, "assets", "prepare-whiteboard-source.ts"),
@@ -484,6 +487,9 @@ const learningSourcePath = join(output, "learning-source.txt");
 const learningInventoryPath = join(output, "learning-source-inventory.json");
 const learningSource = `${learningParagraphs.join("\n\n")}\n`;
 await Bun.write(learningSourcePath, learningSource);
+await unlink(learningInventoryPath).catch((error: NodeJS.ErrnoException) => {
+  if (error?.code !== "ENOENT") throw error;
+});
 await run(["bun", join(root, "assets", "prepare-whiteboard-source.ts"), learningSourcePath, learningInventoryPath]);
 
 const learningPanel = (body: string, label: string, className = "learning-material") =>

@@ -4,9 +4,14 @@ import { basename } from "node:path";
 
 export type NoteSchema = "legacy" | "ljg-is-v2" | "ljg-is-v3" | "ljg-is-v4" | "ljg-is-v5";
 
+export type ReviewStatus = "structural_fail" | "review_required" | "structural_checks_only";
+
 export type ValidationResult = {
   ok: boolean;
   errors: string[];
+  warnings: string[];
+  review_required: boolean;
+  review_status: ReviewStatus;
   identifier?: string;
   schema?: NoteSchema;
   definition?: string;
@@ -139,6 +144,13 @@ type V5Fields = {
   guidance?: string;
 };
 
+const SEMANTIC_REVIEW_WARNING = "需复核：operation 是否写清机制、recognition 是否写出判断变化、falsifier 是否真会推翻解释，均不由关键词判定。结构通过不是理解通过，不得自动记为读者通过。";
+
+function withinLength(value: string, min: number, max: number): boolean {
+  const length = [...value].length;
+  return length >= min && length <= max;
+}
+
 function validateV5(
   fileName: string,
   content: string,
@@ -148,6 +160,7 @@ function validateV5(
   tags: string[],
   headings: string[],
   errors: string[],
+  warnings: string[],
 ): V5Fields {
   const fileMatch = fileName.match(/^(\d{8}T\d{6})--理解-(.+)__is\.(org|md)$/u);
   if (!fileMatch || !fileMatch[2]?.trim()) {
@@ -199,19 +212,17 @@ function validateV5(
   }
 
   const operation = metadataValue(content, "operation", format);
-  const operationVerb = /(?:输入|输出|映射|比较|选择|计算|组织|连接|限制|决定|调整|保留|排除|生成|改变|作用|把|将|让|使|通过|根据|按照)/u;
   if (!operation) {
     errors.push("v5 必须用 operation 元数据记录 X 怎样起作用");
-  } else if ([...operation].length < 18 || [...operation].length > 200 || !operationVerb.test(operation)) {
-    errors.push("v5 operation 要说清关键动作以及什么因此改变，不能只重复用途或影响");
+  } else if (!withinLength(operation, 18, 200)) {
+    errors.push("v5 operation 长度必须在 18 到 200 字");
   }
 
   const recognition = metadataValue(content, "recognition", format);
-  const recognitionShift = /(?:不是|不再|原来|以为|意味着|这使|改变|不能只|不能再|应当从|关键不在|关键在|真正)/u;
   if (!recognition) {
     errors.push("v5 必须用 recognition 元数据记录这番理解修正了哪种旧判断");
-  } else if ([...recognition].length < 18 || [...recognition].length > 200 || !recognitionShift.test(recognition)) {
-    errors.push("v5 recognition 要写出理解前后的判断差别，不能另起一句抽象感想");
+  } else if (!withinLength(recognition, 18, 200)) {
+    errors.push("v5 recognition 长度必须在 18 到 200 字");
   }
 
   const guidance = metadataValue(content, "guidance", format);
@@ -233,9 +244,8 @@ function validateV5(
   const falsifier = metadataValue(content, "falsifier", format);
   if (!falsifier) {
     errors.push("v5 必须用 falsifier 元数据记录什么事实会推翻当前解释");
-  } else if (!/(?:如果|若).*(?:站不住|不成立|重写|推翻|需要改)/su.test(falsifier)) {
-    errors.push("v5 falsifier 必须明确写出在什么事实下当前解释会不成立或需要重写");
   }
+  warnings.push(SEMANTIC_REVIEW_WARNING);
 
   const semicolons = visibleBody.match(/；/gu)?.length ?? 0;
   const listCommas = visibleBody.match(/、/gu)?.length ?? 0;
@@ -262,6 +272,7 @@ function validateV4(
   tags: string[],
   headings: string[],
   errors: string[],
+  warnings: string[],
 ): string | undefined {
   const fileMatch = fileName.match(/^(\d{8}T\d{6})--动词-(.+)__is\.(org|md)$/u);
   if (!fileMatch || !fileMatch[2]?.trim()) {
@@ -326,9 +337,8 @@ function validateV4(
   const falsifier = metadataValue(content, "falsifier", format);
   if (!falsifier) {
     errors.push("v4 必须用 falsifier 元数据记录什么事实会推翻当前解释");
-  } else if (!/(?:如果|若).*(?:站不住|不成立|重写|推翻|需要改)/su.test(falsifier)) {
-    errors.push("v4 falsifier 必须明确写出在什么事实下当前解释会不成立或需要重写");
   }
+  warnings.push(SEMANTIC_REVIEW_WARNING);
 
   const semicolons = visibleBody.match(/；/gu)?.length ?? 0;
   const listCommas = visibleBody.match(/、/gu)?.length ?? 0;
@@ -480,6 +490,7 @@ function validateLegacy(
 
 export function validateNoteText(filePath: string, content: string): ValidationResult {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const fileName = basename(filePath);
   const extension = fileName.match(/\.(org|md)$/u)?.[1] as NoteFormat | undefined;
   const format = extension ?? "org";
@@ -518,20 +529,39 @@ export function validateNoteText(filePath: string, content: string): ValidationR
   let action: string | undefined;
   let core: string | undefined;
   if (schema === V5_SCHEMA) {
-    ({ definition, operation, recognition, guidance } = validateV5(fileName, content, format, identifier, title, tags, headings, errors));
+    ({ definition, operation, recognition, guidance } = validateV5(fileName, content, format, identifier, title, tags, headings, errors, warnings));
   } else if (schema === V4_SCHEMA) {
-    action = validateV4(fileName, content, format, identifier, title, tags, headings, errors);
+    action = validateV4(fileName, content, format, identifier, title, tags, headings, errors, warnings);
   } else if (schema === V3_SCHEMA) {
     action = validateV3(fileName, content, format, identifier, title, tags, headings, errors);
   } else if (schema) {
     core = validateLegacy(fileName, content, format, schema, identifier, title, tags, headings, errors);
   }
-  return { ok: errors.length === 0, errors, identifier, schema, definition, operation, recognition, guidance, action, core };
+  const ok = errors.length === 0;
+  const reviewRequired = schema === V4_SCHEMA || schema === V5_SCHEMA;
+  const review_status: ReviewStatus = !ok ? "structural_fail" : reviewRequired ? "review_required" : "structural_checks_only";
+  return {
+    ok,
+    errors,
+    warnings,
+    review_required: reviewRequired,
+    review_status,
+    identifier,
+    schema,
+    definition,
+    operation,
+    recognition,
+    guidance,
+    action,
+    core,
+  };
 }
 
 export async function validateNoteFile(filePath: string): Promise<ValidationResult> {
   const file = Bun.file(filePath);
-  if (!(await file.exists())) return { ok: false, errors: [`文件不存在：${filePath}`] };
+  if (!(await file.exists())) {
+    return { ok: false, errors: [`文件不存在：${filePath}`], warnings: [], review_required: false, review_status: "structural_fail" };
+  }
   return validateNoteText(filePath, await file.text());
 }
 
@@ -539,17 +569,19 @@ if (import.meta.main) {
   const filePath = Bun.argv[2];
   if (filePath === "--help" || filePath === "-h") {
     console.log("用法：bun ValidateNote.ts <note-file>");
-    console.log("校验 ljg-is-v5 可使用理解笔记，并兼容读取 ljg-is-v4、ljg-is-v3、ljg-is-v2 与 legacy 笔记。");
+    console.log("结构、缺字段和合同版本仍会失败。v4/v5 的机制、判断变化和推翻条件只给出复核警告，结构通过不是理解通过。");
     process.exit(0);
   }
   if (!filePath) {
-    console.error(JSON.stringify({ status: "error", errors: ["用法：bun ValidateNote.ts <note-file>"] }));
+    console.error(JSON.stringify({ status: "error", errors: ["用法：bun ValidateNote.ts <note-file>"], warnings: [], review_required: false, review_status: "structural_fail" }));
     process.exit(2);
   }
   const result = await validateNoteFile(filePath);
+  const status = !result.ok ? "error" : result.review_status;
+  const payload = { status, path: filePath, ...result };
   if (!result.ok) {
-    console.error(JSON.stringify({ status: "error", ...result }, null, 2));
+    console.error(JSON.stringify(payload, null, 2));
     process.exit(1);
   }
-  console.log(JSON.stringify({ status: "ok", path: filePath, ...result }, null, 2));
+  console.log(JSON.stringify(payload, null, 2));
 }

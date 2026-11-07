@@ -103,11 +103,123 @@ function displayWidth(line: string): number {
   return [...line].reduce((sum, char) => sum + (/[^\u0000-\u00ff]/.test(char) ? 2 : 1), 0);
 }
 
-function paragraphList(body: string): string[] {
+function paragraphList(body: string, markdown = false): string[] {
   return body
     .split(/\r?\n\s*\r?\n/)
     .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph && !/^(?:#\+|\*)/.test(paragraph));
+    .filter((paragraph) => paragraph && !(markdown ? /^#{1,6}[ \t]/ : /^(?:#\+|\*)/).test(paragraph));
+}
+
+type NoteFormat = "org" | "markdown";
+
+interface TextSpan {
+  start: number;
+  end: number;
+  inner: string;
+}
+
+interface ExampleBlock {
+  index: number;
+  0: string;
+  1: string;
+}
+
+function noteFormat(file: string): NoteFormat {
+  return file.toLowerCase().endsWith(".md") ? "markdown" : "org";
+}
+
+function markdownFrontmatter(content: string): { end: number; entries: Array<{ key: string; value: string }> } | null {
+  const match = content.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match || match.index !== 0) return null;
+  const entries: Array<{ key: string; value: string }> = [];
+  for (const rawLine of (match[1] ?? "").split(/\r?\n/)) {
+    const field = rawLine.match(/^([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)$/);
+    if (!field) continue;
+    let value = (field[2] ?? "").replace(/\s+$/, "");
+    if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
+      value = value.slice(1, -1);
+    }
+    entries.push({ key: field[1].toLowerCase(), value: value.trim() });
+  }
+  return { end: match[0].length, entries };
+}
+
+interface FenceScan {
+  closed: TextSpan[];
+  unclosed: TextSpan[];
+}
+
+function readLine(content: string, index: number): { start: number; next: number; text: string } {
+  let end = content.indexOf("\n", index);
+  if (end < 0) end = content.length;
+  let text = content.slice(index, end);
+  if (text.endsWith("\r")) text = text.slice(0, -1);
+  return { start: index, next: end < content.length ? end + 1 : content.length, text };
+}
+
+function openingFence(line: string): { char: string; length: number } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line);
+  if (!match) return null;
+  const fence = match[2] ?? "";
+  const info = match[3] ?? "";
+  if (fence.startsWith("`") && info.includes("`")) return null;
+  return { char: fence[0] ?? "", length: fence.length };
+}
+
+function closingFence(line: string, char: string, minLength: number): boolean {
+  const match = /^( {0,3})([`~]+)[ \t]*$/u.exec(line);
+  const token = match?.[2] ?? "";
+  return token.length >= minLength && token[0] === char && [...token].every((item) => item === char);
+}
+
+function scanMarkdownFences(content: string): FenceScan {
+  const closed: TextSpan[] = [];
+  const unclosed: TextSpan[] = [];
+  let index = 0;
+  while (index < content.length) {
+    const line = readLine(content, index);
+    const opener = openingFence(line.text);
+    if (!opener) {
+      index = line.next;
+      continue;
+    }
+    let cursor = line.next;
+    let found: { contentEnd: number; end: number } | null = null;
+    while (cursor < content.length) {
+      const candidate = readLine(content, cursor);
+      if (closingFence(candidate.text, opener.char, opener.length)) {
+        found = { contentEnd: candidate.start, end: candidate.next };
+        break;
+      }
+      cursor = candidate.next;
+    }
+    if (!found) {
+      unclosed.push({ start: line.start, end: content.length, inner: content.slice(line.next) });
+      break;
+    }
+    closed.push({ start: line.start, end: found.end, inner: content.slice(line.next, found.contentEnd) });
+    index = found.end;
+  }
+  return { closed, unclosed };
+}
+
+function indexInside(index: number, spans: TextSpan[]): boolean {
+  return spans.some((span) => index >= span.start && index < span.end);
+}
+
+function maskSpans(content: string, spans: TextSpan[]): string {
+  if (spans.length === 0) return content;
+  let cursor = 0;
+  let masked = "";
+  for (const span of spans) {
+    masked += `${content.slice(cursor, span.start)}\n\n`;
+    cursor = span.end;
+  }
+  return masked + content.slice(cursor);
+}
+
+function bareSource(value: string): boolean {
+  return /^(?:https?:\/\/\S+|\/[^\r\n]+)$/i.test(value.trim());
 }
 
 export function validate(content: string, file: string, paperMap?: string): Result {
@@ -115,27 +227,58 @@ export function validate(content: string, file: string, paperMap?: string): Resu
   const currentFormat = paperMap ? lineField(paperMap, "格式版本") === "3" : false;
   const errors: string[] = [];
   const warnings: string[] = [];
+  const format = noteFormat(file);
+  const markdown = format === "markdown";
+  const frontmatter = markdown ? markdownFrontmatter(content) : null;
+  const fenceScan = markdown ? scanMarkdownFences(content) : { closed: [], unclosed: [] };
+  const fences = fenceScan.closed;
+  const hiddenFences = [...fenceScan.closed, ...fenceScan.unclosed];
+  if (fenceScan.unclosed.length) errors.push("代码块未闭合，请补齐结束围栏");
 
-  for (const header of requiredHeaders) {
-    if (!new RegExp(`^#\\+${header}:\\s+\\S`, "im").test(content)) {
+  const headers = markdown
+    ? ["title", "subtitle", "description", "date", "tags", "identifier", "source", "authors", "venue"]
+    : requiredHeaders;
+  for (const header of headers) {
+    if (markdown) {
+      const values = frontmatter?.entries.filter((entry) => entry.key === header) ?? [];
+      if (!values.some((entry) => /\S/.test(entry.value))) errors.push(`缺少或为空的 ${header}`);
+    } else if (!new RegExp(`^#\\+${header}:\\s+\\S`, "im").test(content)) {
       errors.push(`缺少或为空的 #+${header}`);
     }
   }
 
   const filenameIdentifier = basename(file).match(/^(\d{8}T\d{6})--paper-/)?.[1] ?? "";
-  const identifier = content.match(/^#\+identifier:\s*(\d{8}T\d{6})\s*$/im)?.[1] ?? "";
+  const rawIdentifier = markdown
+    ? frontmatter?.entries.find((entry) => entry.key === "identifier")?.value ?? ""
+    : content.match(/^#\+identifier:\s*(\d{8}T\d{6})\s*$/im)?.[1] ?? "";
+  const identifier = /^\d{8}T\d{6}$/.test(rawIdentifier) ? rawIdentifier : "";
   if (!filenameIdentifier) errors.push("文件名不是 Denote paper 时间戳格式");
   if (!identifier || identifier !== filenameIdentifier) {
     errors.push(`IDENTIFIER ${identifier || "为空"} 与文件名 ${filenameIdentifier || basename(file)} 不一致`);
   }
 
-  const sourceLines = content.match(/^#\+source:.*$/gim) ?? [];
-  if (sourceLines.length !== 1) errors.push(`#+source 必须且只能出现一次，当前为 ${sourceLines.length}`);
-  if (sourceLines.length === 1 && !/^#\+source:\s+(?:https?:\/\/\S+|\/[^\r\n]+?)\s*$/i.test(sourceLines[0])) {
+  const sourceValues = markdown
+    ? (frontmatter?.entries.filter((entry) => entry.key === "source").map((entry) => entry.value) ?? [])
+    : (content.match(/^#\+source:.*$/gim) ?? []);
+  if (sourceValues.length !== 1) {
+    errors.push(markdown
+      ? `source 必须且只能出现一次，当前为 ${sourceValues.length}`
+      : `#+source 必须且只能出现一次，当前为 ${sourceValues.length}`);
+  }
+  if (markdown && sourceValues.length === 1 && !bareSource(sourceValues[0] ?? "")) {
+    errors.push("source 只放一个裸原始 URL 或绝对本地原文路径，不加描述或参考资料列表");
+  }
+  if (!markdown && sourceValues.length === 1 && !/^#\+source:\s+(?:https?:\/\/\S+|\/[^\r\n]+?)\s*$/i.test(sourceValues[0] ?? "")) {
     errors.push("#+source 只放一个裸原始 URL 或绝对本地原文路径，不加描述或参考资料列表");
   }
 
-  const headingMatches = [...content.matchAll(/^\* ([^*\n].*)$/gm)];
+  const headingMatches = markdown
+    ? [...content.matchAll(/^# ([^#\n].*)$/gm)].filter((match) => {
+      const index = match.index ?? 0;
+      if (frontmatter && index < frontmatter.end) return false;
+      return !indexInside(index, hiddenFences);
+    })
+    : [...content.matchAll(/^\* ([^*\n].*)$/gm)];
   const headings = headingMatches.map((match) => match[1].trim());
   if (headings.length < 2) errors.push(`至少需要 2 个由事件、变化或条件命名的一级标题，当前为 ${headings.length}`);
   const genericHits = headings.filter((heading) => genericHeadings.has(heading.replace(/\s+/g, "")));
@@ -158,7 +301,13 @@ export function validate(content: string, file: string, paperMap?: string): Resu
     errors.push(`正文泄漏研究记录或核验语言：${[...new Set(backstageHits)].join("、")}`);
   }
 
-  const paragraphs = paragraphList(body);
+  const analysisBody = markdown
+    ? maskSpans(body, hiddenFences
+      .map((span) => ({ start: span.start - bodyStart, end: span.end - bodyStart, inner: span.inner }))
+      .filter((span) => span.end > 0 && span.start < body.length)
+      .map((span) => ({ start: Math.max(0, span.start), end: Math.min(body.length, span.end), inner: span.inner })))
+    : body;
+  const paragraphs = paragraphList(analysisBody, markdown);
   const denseParagraphs = paragraphs.filter((paragraph) => [...paragraph.replace(/\s/g, "")].length > 240).length;
   if (denseParagraphs) warnings.push(`正文有 ${denseParagraphs} 段超过 240 字；检查是否一次塞入多个重要关系`);
   const numericCounts = paragraphs.map((paragraph) => (paragraph.match(/\d+(?:\.\d+)?%?/g) ?? []).length);
@@ -172,7 +321,13 @@ export function validate(content: string, file: string, paperMap?: string): Resu
   }
   if (numericPileParagraphs) warnings.push(`正文有 ${numericPileParagraphs} 段包含 5–6 个数字；检查各项比较是否必要，保留影响结论的区间与不确定性`);
 
-  const exampleBlocks = [...content.matchAll(/#\+begin_example\s*\n([\s\S]*?)#\+end_example/gim)];
+  const exampleBlocks: ExampleBlock[] = markdown
+    ? fences.map((span) => ({ index: span.start, 0: content.slice(span.start, span.end), 1: span.inner }))
+    : [...content.matchAll(/#\+begin_example\s*\n([\s\S]*?)#\+end_example/gim)].map((block) => ({
+      index: block.index ?? 0,
+      0: block[0],
+      1: block[1] ?? "",
+    }));
   if (!currentFormat && exampleBlocks.length > 1) errors.push("最多保留一个 Markdown 围栏图块");
   const maxDiagramWidth = exampleBlocks.reduce((max, block) => {
     const width = block[1].split(/\r?\n/).reduce((lineMax, line) => Math.max(lineMax, displayWidth(line)), 0);
@@ -203,8 +358,12 @@ export function validate(content: string, file: string, paperMap?: string): Resu
       if (!substantive(lineField(paperMap, field))) errors.push(`paper-map 缺少材料字段：${field}`);
     }
     if (currentFormat) {
-      const noteSource = content.match(/^#\+source:[ \t]*(.*)$/im)?.[1]?.trim() ?? "";
-      if (noteSource !== lineField(paperMap, "原文位置")) errors.push("笔记 #+source 与研究记录的原文位置不一致");
+      const noteSource = markdown
+        ? frontmatter?.entries.find((entry) => entry.key === "source")?.value ?? ""
+        : content.match(/^#\+source:[ \t]*(.*)$/im)?.[1]?.trim() ?? "";
+      if (noteSource !== lineField(paperMap, "原文位置")) {
+        errors.push(markdown ? "笔记 source 与研究记录的原文位置不一致" : "笔记 #+source 与研究记录的原文位置不一致");
+      }
     }
     const injectionScan = lineField(paperMap, "外部指令扫描");
     if (substantive(injectionScan) && !/^(?:未发现|已停止)/.test(injectionScan)) {
@@ -290,7 +449,9 @@ export function validate(content: string, file: string, paperMap?: string): Resu
     if (!yesNoDecision(visualDecision)) errors.push("“是否需要图示”必须明确写是或否并说明理由");
     if (/^是/.test(visualDecision)) {
       if (!exampleBlocks.length || (!currentFormat && exampleBlocks.length !== 1)) {
-        errors.push(currentFormat ? "声明需要图示，但正文没有 example 图块" : "旧版本声明需要图示时，正文必须恰好有 1 个 example 图块");
+        const absent = markdown ? "声明需要图示，但正文没有围栏代码块" : "声明需要图示，但正文没有 example 图块";
+        const exact = markdown ? "旧版本声明需要图示时，正文必须恰好有 1 个围栏代码块" : "旧版本声明需要图示时，正文必须恰好有 1 个 example 图块";
+        errors.push(currentFormat ? absent : exact);
       }
       const carriers = parseAnchors(lineField(paperMap, "图后用什么例子解释"));
       if (currentFormat && carriers.length !== exampleBlocks.length) errors.push("每张图都需要按顺序记录图后解释所用的例子");
@@ -301,7 +462,9 @@ export function validate(content: string, file: string, paperMap?: string): Resu
         if (!carrier || !afterDiagram.includes(carrier)) errors.push(`图后未找到对应例子：${carrier || "未填写"}`);
       }
     } else if (/^否/.test(visualDecision) && exampleBlocks.length) {
-      warnings.push("记录声明不需要图示，但正文含 example 图块；请核对图示决定");
+      warnings.push(markdown
+        ? "记录声明不需要图示，但正文含围栏代码块；请核对图示决定"
+        : "记录声明不需要图示，但正文含 example 图块；请核对图示决定");
     }
 
     for (const field of experimentFields) {
@@ -405,6 +568,7 @@ export function validate(content: string, file: string, paperMap?: string): Resu
       quantitative_exception: quantitativeException,
       paper_map_version: paperMapVersion,
       map_supplied: Boolean(paperMap),
+      format,
     },
   };
 }
@@ -418,7 +582,7 @@ function main(): never {
   const file = positional[0];
 
   if (!file || (mapFlag >= 0 && !mapPath)) {
-    console.error("用法：bun scripts/validate_note.ts <note.md> --map <paper-map.md>");
+    console.error("用法：bun scripts/validate_note.ts <note.md|note.org> --map <paper-map.md>");
     console.error("或：  bun scripts/validate_note.ts --stdin <denote-filename> --map <paper-map.md>");
     process.exit(2);
   }

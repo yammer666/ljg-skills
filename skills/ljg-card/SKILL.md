@@ -96,7 +96,7 @@ bun assets/prepare-whiteboard-source.ts /tmp/<task>/source.txt /tmp/<task>/white
 bun assets/capture.ts <html> <png> 1080 1600 fullpage /tmp/<task>/whiteboard-source-inventory.json /tmp/<task>/source.txt
 ```
 
-来源清单必须直接由本次输入生成，不能由论证账本反推；否则账本漏掉的段落也会一起消失，完整性校验失去意义。
+来源清单必须直接由本次输入生成，不能由论证账本反推；否则账本漏掉的段落也会一起消失，完整性校验失去意义。清单输出已存在时脚本拒绝覆盖并保持原字节，并发写入也只有一方能创建该文件；需要重建时先删除输出再运行。缺来源参数或源文件不存在时非零退出，且不会新建清单。
 
 依赖缺失时：
 
