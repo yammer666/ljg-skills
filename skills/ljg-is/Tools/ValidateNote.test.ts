@@ -337,7 +337,9 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       ["这个概念不只是非常深刻，而且很有启发，值得反复体会。", false],
       ["理解缓存后，判断依据应当从副本是否存在转向命中时是否仍需回源。", true],
       ["判断应当从看副本是否存在转向看命中后是否回源。", true],
+      ["判断缓存不能只看副本是否存在，还要看命中后是否回源。", true],
       ["应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。", false],
+      ["这个概念不能只停留在一句深刻的体会里，它值得大家反复体会。", false],
     ];
     for (const [value, accept] of recognitionCases) {
       const note = withField("recognition", value);
@@ -420,6 +422,36 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       expect(base.test(value), value).toBe(true);
       expect(v5ErrorsFor(withField(key, value)).some((error) => error.includes(key)), value).toBe(true);
     }
+
+    const recognitionAudit: Array<[string, string, string]> = [
+      ["不是", "优化不是只看副本是否存在，而是看命中后是否回源。", "这个概念很深刻，值得反复体会其中的意味。"],
+      ["不再", "人们不再把命中当成源头已经更新的证据。", "这个概念很深刻，值得反复体会其中的意味。"],
+      ["原来", "原来以为副本是否存在就够了，现在改成要看命中后是否回源。", "原来这个概念非常深刻，值得反复体会其中的意味。"],
+      ["以为", "人们以为只看副本是否存在，而不是看命中后是否回源。", "我以为这个概念非常深刻，值得反复体会其中的意味。"],
+      ["意味着", "这意味着判断不能只看副本是否存在，还要看命中后是否回源。", "这意味着缓存很有启发，值得反复体会其中的意味。"],
+      ["这使", "这使判断从看副本是否存在转向看命中后是否回源。", "这使这个概念更加深刻，值得反复体会其中的意味。"],
+      ["改变", "判断依据从副本是否存在改变为命中后是否仍需回源。", "这改变了感受，这个概念非常深刻，值得反复体会。"],
+      ["不能只", "判断缓存不能只看副本是否存在，还要看命中后是否回源。", "这个概念不能只停留在一句深刻的体会里，它值得大家反复体会。"],
+      ["不能再", "不能再把副本是否存在当成充分判断，而要看命中后是否回源。", "这个概念不能再被低估，它非常深刻，值得反复体会。"],
+      ["应当从", "判断依据应当从副本是否存在转向命中时是否仍需回源。", "应当从更深刻的角度体会这个概念，它值得反复体会其中的意味。"],
+      ["关键不在", "关键不在副本是否存在，而在命中后是否仍需回源。", "关键不在表面感受，这个概念非常深刻，值得反复体会。"],
+      ["关键在", "关键在命中后是否回源，而不是副本是否存在。", "关键在于这个概念非常深刻，值得大家反复体会其中的意味。"],
+      ["真正", "真正要改的判断不是副本是否存在，而是命中后是否回源。", "这个概念真正非常深刻，值得大家反复体会其中的意味。"],
+    ];
+    for (const [marker, contrast, praise] of recognitionAudit) {
+      expect(baseRecognition.test(contrast), marker).toBe(true);
+      expect(contrast.includes(marker), marker).toBe(true);
+      expect([...contrast].length, contrast).toBeGreaterThanOrEqual(18);
+      expect(validateNoteText(v5OrgPath, withField("recognition", contrast)).ok, contrast).toBe(true);
+      expect(praise.includes(marker) || marker === "不是" || marker === "不再", marker).toBe(true);
+      expect([...praise].length, praise).toBeGreaterThanOrEqual(18);
+      expect(v5ErrorsFor(withField("recognition", praise)).some((error) => error.includes("recognition")), praise).toBe(true);
+    }
+    const markdownContrast = goodV5Markdown().replace(
+      `recognition: ${RECOGNITION}`,
+      "recognition: 判断缓存不能只看副本是否存在，还要看命中后是否回源。",
+    );
+    expect(validateNoteText(v5MdPath, markdownContrast).ok).toBe(true);
   });
 
   test("does not require a protagonist, forced back-action or question ending", () => {

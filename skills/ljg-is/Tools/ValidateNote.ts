@@ -143,7 +143,7 @@ const PROCESS_VERB = /(?:输入|输出|读入|写入|读取|接收|收下|交出
 const LOOSE_VERB = /(?:作用|处理|把|将|让|使|通过|经由|借助|凭借|根据|按照|依照)/u;
 const PRIOR_JUDGMENT = /(?:原来|原先|原本|本来|此前|以往|以为|误以为|看成|当作|当成|当做)/u;
 const CORRECTION = /(?:改成|改为|修正|纠正|不再|不能只|不能再|关键不在|(?<!只)不是|并非)/u;
-const DIRECT_CORRECTION = /(?:(?<!只)不是|并非|不再)/u;
+const DIRECT_CORRECTION = /(?:(?<!只)不是|并非|(?<!能)不再)/u;
 const FALSIFIER_CONDITION = /(?:如果|若(?!干)|假如|倘若|要是|一旦|假使|倘使|要不是)/u;
 const FALSIFIER_FAILURE = /站不住|不再成立|不再适用|不能再用|不成立/gu;
 const FALSIFIER_REVISION = /失效|重写|改写|推翻|推倒|需要改|得改|必须改|就要改|便要改/gu;
@@ -162,8 +162,10 @@ function recognitionHasContrast(recognition: string): boolean {
   const corrects = CORRECTION.test(recognition);
   if (PRIOR_JUDGMENT.test(recognition) && corrects) return true;
   if (DIRECT_CORRECTION.test(recognition)) return true;
-  // Two named judgments: 从 A 转向 B. A bare 应当从 without 转向 is not this shape.
-  return /从[^，。；,\n]{1,48}转向/u.test(recognition);
+  // Two named judgments. A bare 应当从, 不能只, or 关键不在 is not enough.
+  return /从[^，。；,\n]{1,48}(?:转向|改为|改变为)/u.test(recognition)
+    || /不能只[^。；\n]{1,48}还要/u.test(recognition)
+    || /关键不在[^。；\n]{1,48}而在/u.test(recognition);
 }
 
 function overturnIsNegated(before: string): boolean {
