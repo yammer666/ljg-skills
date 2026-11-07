@@ -496,7 +496,7 @@ describe("markdown notes keep org compatibility", () => {
     expect(validate(markdown, markdownFilename, validMap).stats.top_headings).toBe(4);
   });
 
-  test("does not count list markers or fenced headings, and an unclosed fence does not hide later headings", () => {
+  test("does not count list markers or closed-fence headings", () => {
     const listed = toMarkdownNote(validNote).replace(
       "# 技能库扩大以后",
       "* 这不是一级标题\n\n# 技能库扩大以后",
@@ -512,14 +512,83 @@ describe("markdown notes keep org compatibility", () => {
     expect(fencedResult.stats.example_blocks).toBe(1);
     expect(fencedResult.stats.numeric_tokens).toBe(0);
     expect(fencedResult.errors).toEqual([]);
+  });
 
+  test("rejects an unclosed fence and ignores headings trapped inside it", () => {
     const unclosed = toMarkdownNote(withFourthHeading(validNote)).replace(
       "# 条件变化以后边界仍在",
       "```\n# 未闭合围栏里的假标题\n# 条件变化以后边界仍在",
     );
     const unclosedResult = validate(unclosed, markdownFilename, validMap);
-    expect(unclosedResult.stats.top_headings).toBe(5);
-    expect(unclosedResult.errors.join("\n")).not.toContain("当前为 0");
+    expect(unclosedResult.ok).toBe(false);
+    expect(unclosedResult.stats.top_headings).toBe(3);
+    expect(unclosedResult.stats.example_blocks).toBe(0);
+    expect(unclosedResult.errors.join("\n")).toContain("代码块未闭合，请补齐结束围栏");
+
+    const swallowed = toMarkdownNote(validNote).replace(
+      "# 结账请求为什么仍然失败",
+      "```\n# 假标题\n# 结账请求为什么仍然失败",
+    );
+    const swallowedResult = validate(swallowed, markdownFilename, validMap);
+    expect(swallowedResult.stats.top_headings).toBe(0);
+    expect(swallowedResult.errors.join("\n")).toContain("代码块未闭合，请补齐结束围栏");
+    expect(swallowedResult.errors.join("\n")).toContain("当前为 0");
+  });
+
+  test("accepts a longer same-character close and rejects a shorter or mismatched one", () => {
+    const longer = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n```text\n# 假标题\n记录 -> 动作\n````\n\n结账请求仍说明正文。",
+    );
+    const longerResult = validate(longer, markdownFilename, validMap);
+    expect(longerResult.errors).toEqual([]);
+    expect(longerResult.stats.example_blocks).toBe(1);
+    expect(longerResult.stats.top_headings).toBe(3);
+
+    const indented = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n   ```\n# 假标题\n记录 -> 动作\n   ````\n\n结账请求仍说明正文。",
+    );
+    const indentedResult = validate(indented, markdownFilename, validMap);
+    expect(indentedResult.errors).toEqual([]);
+    expect(indentedResult.stats.example_blocks).toBe(1);
+    expect(indentedResult.stats.top_headings).toBe(3);
+
+    const tilde = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n~~~\n# 假标题\n检索 -> 适配\n~~~~\n\n结账请求仍说明正文。",
+    );
+    expect(validate(tilde, markdownFilename, validMap).stats.example_blocks).toBe(1);
+    expect(validate(tilde, markdownFilename, validMap).stats.top_headings).toBe(3);
+    expect(validate(tilde, markdownFilename, validMap).errors).toEqual([]);
+
+    const shorter = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n`````\n# 假标题\n```\n\n# 短围栏不能放出的标题\n",
+    );
+    const shorterResult = validate(shorter, markdownFilename, validMap);
+    expect(shorterResult.ok).toBe(false);
+    expect(shorterResult.stats.example_blocks).toBe(0);
+    expect(shorterResult.stats.top_headings).toBe(3);
+    expect(shorterResult.errors.join("\n")).toContain("代码块未闭合，请补齐结束围栏");
+
+    const overIndented = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n```\n# 假标题\n    ```\n\n# 四格缩进不能结束\n",
+    );
+    const overIndentedResult = validate(overIndented, markdownFilename, validMap);
+    expect(overIndentedResult.stats.example_blocks).toBe(0);
+    expect(overIndentedResult.stats.top_headings).toBe(3);
+    expect(overIndentedResult.errors.join("\n")).toContain("代码块未闭合，请补齐结束围栏");
+
+    const mismatched = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n```\n# 假标题\n~~~\n\n# 不同字符不能结束\n",
+    );
+    const mismatchedResult = validate(mismatched, markdownFilename, validMap);
+    expect(mismatchedResult.stats.example_blocks).toBe(0);
+    expect(mismatchedResult.stats.top_headings).toBe(3);
+    expect(mismatchedResult.errors.join("\n")).toContain("代码块未闭合，请补齐结束围栏");
   });
 
   test("accepts fenced diagrams in order and rejects an org example block inside markdown", () => {

@@ -142,17 +142,35 @@ type V5Fields = {
 const OPERATION_SPECIFIC = /(?:输入|输出|读入|写入|读取|接收|收下|交出|交回|交还|映射|比较|对照|选择|筛选|过滤|计算|运算|组织|整理|归并|连接|衔接|限制|约束|决定|判定|调整|保留|留下|排除|去掉|生成|改变|转换|转化|触发|驱动|查找|检索|匹配|收窄|展开|执行|运行|调用|返回|分解|拆成|拆开|合并|命中)/u;
 const OPERATION_LOOSE = /(?:作用|处理|把|将|让|使|通过|经由|借助|凭借|根据|按照|依照)/u;
 const OPERATION_PURPOSE_SLOGAN = /(?:用途是|用来|用于帮助|有助于|可以帮助|影响很大|值得关注|很重要|提高效率|改善体验)/u;
-const RECOGNITION_SHIFT = /(?:不是|并非|不再|不只|原来|原先|原本|本来|此前|以为|误以为|看成|当作|当成|意味着|这使|这说明|改变|改成|改为|修正|纠正|不能只|不能再|应当从|关键不在|关键在|真正)/u;
+const RECOGNITION_SHIFT = /(?:不是|并非|不再|不只|原来|原先|原本|本来|此前|以为|误以为|看成|当作|当成|意味着|这使|改变|改成|改为|修正|纠正|不能只|不能再|应当从|关键不在|关键在|真正)/u;
 const FALSIFIER_CONDITION = /(?:如果|若(?!干)|假如|倘若|要是|一旦|假使|倘使|要不是)/u;
-const FALSIFIER_OVERTURN = /(?:站不住|不成立|不再成立|失效|不再适用|不能再用|重写|改写|推翻|推倒|需要改|得改|必须改|就要改|便要改)/u;
+const FALSIFIER_FAILURE = /站不住|不再成立|不再适用|不能再用|不成立/gu;
+const FALSIFIER_REVISION = /失效|重写|改写|推翻|推倒|需要改|得改|必须改|就要改|便要改/gu;
+const FAILURE_NEGATION = /(?:并非|并不是|不是|并没有|没有|不会|并不)$/u;
+const REVISION_NEGATION = /(?:不需要|不必|不用|不会|并不|没有|并未|绝不|不是|不能|不可|不得|无需|别|没|未|不|非)$/u;
 
 function operationRecordsMechanism(operation: string): boolean {
-  if (OPERATION_SPECIFIC.test(operation)) return true;
-  return OPERATION_LOOSE.test(operation) && !OPERATION_PURPOSE_SLOGAN.test(operation);
+  if (OPERATION_PURPOSE_SLOGAN.test(operation)) return false;
+  return OPERATION_SPECIFIC.test(operation) || OPERATION_LOOSE.test(operation);
+}
+
+function hasAffirmativeOverturn(falsifier: string): boolean {
+  for (const match of falsifier.matchAll(FALSIFIER_FAILURE)) {
+    const before = falsifier.slice(Math.max(0, (match.index ?? 0) - 6), match.index ?? 0);
+    if (FAILURE_NEGATION.test(before)) continue;
+    return true;
+  }
+  for (const match of falsifier.matchAll(FALSIFIER_REVISION)) {
+    const before = falsifier.slice(Math.max(0, (match.index ?? 0) - 6), match.index ?? 0);
+    if (/不得不$/u.test(before)) return true;
+    if (REVISION_NEGATION.test(before)) continue;
+    return true;
+  }
+  return false;
 }
 
 function falsifierStatesCounterfactual(falsifier: string): boolean {
-  return FALSIFIER_CONDITION.test(falsifier) && FALSIFIER_OVERTURN.test(falsifier);
+  return FALSIFIER_CONDITION.test(falsifier) && hasAffirmativeOverturn(falsifier);
 }
 
 function validateV5(

@@ -144,14 +144,63 @@ function markdownFrontmatter(content: string): { end: number; entries: Array<{ k
   return { end: match[0].length, entries };
 }
 
-function completeFenceSpans(content: string): TextSpan[] {
-  const spans: TextSpan[] = [];
-  const pattern = /^(`{3,}|~{3,})[^\r\n]*\r?\n([\s\S]*?)^\1[ \t]*$/gm;
-  for (const match of content.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    spans.push({ start, end: start + match[0].length, inner: match[2] ?? "" });
+interface FenceScan {
+  closed: TextSpan[];
+  unclosed: TextSpan[];
+}
+
+function readLine(content: string, index: number): { start: number; next: number; text: string } {
+  let end = content.indexOf("\n", index);
+  if (end < 0) end = content.length;
+  let text = content.slice(index, end);
+  if (text.endsWith("\r")) text = text.slice(0, -1);
+  return { start: index, next: end < content.length ? end + 1 : content.length, text };
+}
+
+function openingFence(line: string): { char: string; length: number } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line);
+  if (!match) return null;
+  const fence = match[2] ?? "";
+  const info = match[3] ?? "";
+  if (fence.startsWith("`") && info.includes("`")) return null;
+  return { char: fence[0] ?? "", length: fence.length };
+}
+
+function closingFence(line: string, char: string, minLength: number): boolean {
+  const match = /^( {0,3})([`~]+)[ \t]*$/u.exec(line);
+  const token = match?.[2] ?? "";
+  return token.length >= minLength && token[0] === char && [...token].every((item) => item === char);
+}
+
+function scanMarkdownFences(content: string): FenceScan {
+  const closed: TextSpan[] = [];
+  const unclosed: TextSpan[] = [];
+  let index = 0;
+  while (index < content.length) {
+    const line = readLine(content, index);
+    const opener = openingFence(line.text);
+    if (!opener) {
+      index = line.next;
+      continue;
+    }
+    let cursor = line.next;
+    let found: { contentEnd: number; end: number } | null = null;
+    while (cursor < content.length) {
+      const candidate = readLine(content, cursor);
+      if (closingFence(candidate.text, opener.char, opener.length)) {
+        found = { contentEnd: candidate.start, end: candidate.next };
+        break;
+      }
+      cursor = candidate.next;
+    }
+    if (!found) {
+      unclosed.push({ start: line.start, end: content.length, inner: content.slice(line.next) });
+      break;
+    }
+    closed.push({ start: line.start, end: found.end, inner: content.slice(line.next, found.contentEnd) });
+    index = found.end;
   }
-  return spans;
+  return { closed, unclosed };
 }
 
 function indexInside(index: number, spans: TextSpan[]): boolean {
@@ -181,7 +230,10 @@ export function validate(content: string, file: string, paperMap?: string): Resu
   const format = noteFormat(file);
   const markdown = format === "markdown";
   const frontmatter = markdown ? markdownFrontmatter(content) : null;
-  const fences = markdown ? completeFenceSpans(content) : [];
+  const fenceScan = markdown ? scanMarkdownFences(content) : { closed: [], unclosed: [] };
+  const fences = fenceScan.closed;
+  const hiddenFences = [...fenceScan.closed, ...fenceScan.unclosed];
+  if (fenceScan.unclosed.length) errors.push("代码块未闭合，请补齐结束围栏");
 
   const headers = markdown
     ? ["title", "subtitle", "description", "date", "tags", "identifier", "source", "authors", "venue"]
@@ -224,7 +276,7 @@ export function validate(content: string, file: string, paperMap?: string): Resu
     ? [...content.matchAll(/^# ([^#\n].*)$/gm)].filter((match) => {
       const index = match.index ?? 0;
       if (frontmatter && index < frontmatter.end) return false;
-      return !indexInside(index, fences);
+      return !indexInside(index, hiddenFences);
     })
     : [...content.matchAll(/^\* ([^*\n].*)$/gm)];
   const headings = headingMatches.map((match) => match[1].trim());
@@ -250,7 +302,7 @@ export function validate(content: string, file: string, paperMap?: string): Resu
   }
 
   const analysisBody = markdown
-    ? maskSpans(body, fences
+    ? maskSpans(body, hiddenFences
       .map((span) => ({ start: span.start - bodyStart, end: span.end - bodyStart, inner: span.inner }))
       .filter((span) => span.end > 0 && span.start < body.length)
       .map((span) => ({ start: Math.max(0, span.start), end: Math.min(body.length, span.end), inner: span.inner })))

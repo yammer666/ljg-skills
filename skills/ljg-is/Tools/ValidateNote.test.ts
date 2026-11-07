@@ -255,6 +255,11 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       "#+falsifier: 当前解释就得改写，假如命中时仍要回源读取整份数据。",
     );
     expect(validateNoteText(v5OrgPath, reversed).ok).toBe(true);
+    const contrastiveExplanation = goodV5Org().replace(
+      `#+recognition: ${RECOGNITION}`,
+      "#+recognition: 这说明人们原先把缓存看成总会更新的副本，读过路径以后会改成只在命中时省掉取数。",
+    );
+    expect(validateNoteText(v5OrgPath, contrastiveExplanation).ok).toBe(true);
   });
 
   test("still rejects purpose-only operation, abstract recognition, and non-falsifying counterevidence", () => {
@@ -274,7 +279,22 @@ describe("ValidateNote v5 usable-understanding contract", () => {
       "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
       "#+falsifier: 若干人不同意这个说法，所以当前解释需要重写。",
     );
+    const arrangePurpose = goodV5Org().replace(
+      `#+operation: ${OPERATION}`,
+      "#+operation: 它的用途是帮助人们整理日常资料、提高效率并改善体验。",
+    );
+    const explainsAbstract = goodV5Org().replace(
+      `#+recognition: ${RECOGNITION}`,
+      "#+recognition: 这说明这个概念非常深刻，给人很大启发，值得反复体会。",
+    );
+    const negatedFalsifier = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
+    );
     expect(v5ErrorsFor(purpose).some((error) => error.includes("operation"))).toBe(true);
+    expect(v5ErrorsFor(arrangePurpose).some((error) => error.includes("operation"))).toBe(true);
+    expect(v5ErrorsFor(explainsAbstract).some((error) => error.includes("recognition"))).toBe(true);
+    expect(v5ErrorsFor(negatedFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
     expect(v5ErrorsFor(slogan).some((error) => error.includes("operation"))).toBe(true);
     expect(v5ErrorsFor(abstract).some((error) => error.includes("recognition"))).toBe(true);
     expect(v5ErrorsFor(bareActually).some((error) => error.includes("recognition"))).toBe(true);
@@ -398,6 +418,11 @@ describe("ValidateNote v4 narrative contract", () => {
       "#+falsifier: 假如司机和乘客事实上共同掌握全部关键规则，这套解释就失效了。",
     );
     expect(validateNoteText(orgPath, naturalCondition).ok).toBe(true);
+    const negatedFalsifier = goodV4Org().replace(
+      "#+falsifier: 如果拿掉平台对入口和派单的安排，服务仍能按原样运行，那么当前解释就需要重写。",
+      "#+falsifier: 假如缓存命中仍需回源，当前解释依然成立，不需要改写。",
+    );
+    expect(errorsFor(negatedFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
     expect(errorsFor(noFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
     expect(errorsFor(closed).some((error) => error.includes("真问题"))).toBe(true);
   });
