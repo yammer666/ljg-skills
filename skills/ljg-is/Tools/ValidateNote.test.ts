@@ -236,6 +236,53 @@ describe("ValidateNote v5 usable-understanding contract", () => {
     expect(v5ErrorsFor(label).some((error) => error.includes("字段标签"))).toBe(true);
   });
 
+  test("accepts natural operation, recognition, and falsifier wording in Org and Markdown", () => {
+    const operation = "缓存先收下请求，再按键查找已有结果；命中时直接交回已存内容，未命中才回到源头读取。";
+    const recognition = "人们原先把缓存看成总会更新的副本，读过读写路径以后会改成：它只在命中时省掉一次取数。";
+    const falsifier = "假如缓存命中时仍然每次都回到源头读取整份数据，这套解释就失效了。";
+    const org = goodV5Org()
+      .replace(`#+operation: ${OPERATION}`, `#+operation: ${operation}`)
+      .replace(`#+recognition: ${RECOGNITION}`, `#+recognition: ${recognition}`)
+      .replace("#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。", `#+falsifier: ${falsifier}`);
+    const markdown = goodV5Markdown()
+      .replace(`operation: ${OPERATION}`, `operation: ${operation}`)
+      .replace(`recognition: ${RECOGNITION}`, `recognition: ${recognition}`)
+      .replace("falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。", `falsifier: ${falsifier}`);
+    expect(validateNoteText(v5OrgPath, org).ok).toBe(true);
+    expect(validateNoteText(v5MdPath, markdown).ok).toBe(true);
+    const reversed = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 当前解释就得改写，假如命中时仍要回源读取整份数据。",
+    );
+    expect(validateNoteText(v5OrgPath, reversed).ok).toBe(true);
+  });
+
+  test("still rejects purpose-only operation, abstract recognition, and non-falsifying counterevidence", () => {
+    const purpose = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 它的用途是帮助人们提高效率并改善日常体验。");
+    const slogan = goodV5Org().replace(`#+operation: ${OPERATION}`, "#+operation: 它通过提高效率来发挥作用，用途是帮助人们改善体验。");
+    const abstract = goodV5Org().replace(`#+recognition: ${RECOGNITION}`, "#+recognition: 这个概念很深刻，让人感到启发，值得反复体会。");
+    const bareActually = goodV5Org().replace(`#+recognition: ${RECOGNITION}`, "#+recognition: 其实这个概念给人一种深刻的启发，值得继续体会其中的意味。");
+    const noCondition = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 当前解释以后可能需要重写，不过现在还没有具体事实。",
+    );
+    const noOverturn = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 如果大家以后更加努力，整体结果就会变得更好。",
+    );
+    const several = goodV5Org().replace(
+      "#+falsifier: 如果候选方案的目标函数值与求解过程的比较和选择完全无关，那么当前解释需要重写。",
+      "#+falsifier: 若干人不同意这个说法，所以当前解释需要重写。",
+    );
+    expect(v5ErrorsFor(purpose).some((error) => error.includes("operation"))).toBe(true);
+    expect(v5ErrorsFor(slogan).some((error) => error.includes("operation"))).toBe(true);
+    expect(v5ErrorsFor(abstract).some((error) => error.includes("recognition"))).toBe(true);
+    expect(v5ErrorsFor(bareActually).some((error) => error.includes("recognition"))).toBe(true);
+    expect(v5ErrorsFor(noCondition).some((error) => error.includes("falsifier"))).toBe(true);
+    expect(v5ErrorsFor(noOverturn).some((error) => error.includes("falsifier"))).toBe(true);
+    expect(v5ErrorsFor(several).some((error) => error.includes("falsifier"))).toBe(true);
+  });
+
   test("does not require a protagonist, forced back-action or question ending", () => {
     const result = validateNoteText(v5OrgPath, goodV5Org());
     expect(result.ok).toBe(true);
@@ -346,6 +393,11 @@ describe("ValidateNote v4 narrative contract", () => {
     const noFalsifier = goodV4Org().replace(/^#\+falsifier: .+\n/mu, "");
     const closed = goodV4Org().replace("到底谁有权修改维持它的规则？", "这些规则最终会得到妥善解决。");
     expect(validateNoteText(orgPath, natural).ok).toBe(true);
+    const naturalCondition = goodV4Org().replace(
+      "#+falsifier: 如果拿掉平台对入口和派单的安排，服务仍能按原样运行，那么当前解释就需要重写。",
+      "#+falsifier: 假如司机和乘客事实上共同掌握全部关键规则，这套解释就失效了。",
+    );
+    expect(validateNoteText(orgPath, naturalCondition).ok).toBe(true);
     expect(errorsFor(noFalsifier).some((error) => error.includes("falsifier"))).toBe(true);
     expect(errorsFor(closed).some((error) => error.includes("真问题"))).toBe(true);
   });

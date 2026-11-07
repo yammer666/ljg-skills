@@ -449,3 +449,137 @@ describe("version 3 review regressions", () => {
     expect(validate(validNote, filename, populated).errors).toEqual([]);
   });
 });
+
+function toMarkdownNote(orgNote: string): string {
+  const meta: string[] = [];
+  const body: string[] = [];
+  let inBody = false;
+  for (const line of orgNote.split("\n")) {
+    const header = !inBody ? line.match(/^#\+([A-Za-z][A-Za-z0-9_]*):\s*(.*)$/) : null;
+    if (header) {
+      const key = header[1].toLowerCase() === "filetags" ? "tags" : header[1].toLowerCase();
+      const value = key === "tags" ? header[2].replace(/^:+|:+$/g, "").replace(/:/g, " ").trim() : header[2];
+      meta.push(`${key}: ${value}`);
+      continue;
+    }
+    inBody = true;
+    body.push(line.replace(/^\* (?!\*)/, "# "));
+  }
+  return `---\n${meta.join("\n")}\n---\n${body.join("\n")}`;
+}
+
+const markdownFilename = filename.replace(/\.org$/, ".md");
+
+function withFourthHeading(note: string): string {
+  return note.replace(
+    "\n技能保存动作关系，却不保存这些动作永远正确的权利。\n",
+    "\n* 条件变化以后边界仍在\n\n技能保存动作关系，却不保存这些动作永远正确的权利。\n",
+  );
+}
+
+describe("markdown notes keep org compatibility", () => {
+  test("counts four markdown H1 headings and the org equivalent", () => {
+    const org = withFourthHeading(validNote);
+    const markdown = toMarkdownNote(org);
+    const orgResult = validate(org, filename, validMap);
+    const markdownResult = validate(markdown, markdownFilename, validMap);
+    expect(orgResult.stats.top_headings).toBe(4);
+    expect(markdownResult.stats.top_headings).toBe(4);
+    expect(markdownResult.stats.format).toBe("markdown");
+    expect(orgResult.stats.format).toBe("org");
+    expect(markdownResult.errors).toEqual([]);
+    expect(orgResult.errors).toEqual([]);
+  });
+
+  test("does not treat a markdown note as zero headings when it uses H1 markers", () => {
+    const markdown = toMarkdownNote(withFourthHeading(validNote)).replace(/\r?\n/g, "\r\n");
+    expect(validate(markdown, markdownFilename, validMap).stats.top_headings).toBe(4);
+  });
+
+  test("does not count list markers or fenced headings, and an unclosed fence does not hide later headings", () => {
+    const listed = toMarkdownNote(validNote).replace(
+      "# 技能库扩大以后",
+      "* 这不是一级标题\n\n# 技能库扩大以后",
+    );
+    expect(validate(listed, markdownFilename, validMap).stats.top_headings).toBe(3);
+
+    const fenced = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "技能库让检索进入链条。\n\n```text\n# 假标题\n* 假Org标题\n61.9% 55.9% 59.1% 65.7% 4.5% 23.5% 10.0%\n记录 -> 动作\n```\n\n结账请求仍说明正文。",
+    );
+    const fencedResult = validate(fenced, markdownFilename, validMap);
+    expect(fencedResult.stats.top_headings).toBe(3);
+    expect(fencedResult.stats.example_blocks).toBe(1);
+    expect(fencedResult.stats.numeric_tokens).toBe(0);
+    expect(fencedResult.errors).toEqual([]);
+
+    const unclosed = toMarkdownNote(withFourthHeading(validNote)).replace(
+      "# 条件变化以后边界仍在",
+      "```\n# 未闭合围栏里的假标题\n# 条件变化以后边界仍在",
+    );
+    const unclosedResult = validate(unclosed, markdownFilename, validMap);
+    expect(unclosedResult.stats.top_headings).toBe(5);
+    expect(unclosedResult.errors.join("\n")).not.toContain("当前为 0");
+  });
+
+  test("accepts fenced diagrams in order and rejects an org example block inside markdown", () => {
+    const note = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "```text\n记录 -> 动作\n```\n\n结账请求说明第一张图。\n\n~~~\n检索 -> 适配\n~~~\n\n技能库让检索进入链条。",
+    );
+    const map = currentMap
+      .replace(/^- 是否需要图示：.*$/m, "- 是否需要图示：是——两条不同关系")
+      .replace(/^- 图后用什么例子解释：.*$/m, "- 图后用什么例子解释：结账请求｜技能库");
+    expect(validate(note, markdownFilename, map).errors).toEqual([]);
+    expect(validate(note, markdownFilename, map.replace("结账请求｜技能库", "技能库｜结账请求")).ok).toBe(false);
+
+    const orgBlock = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      "#+begin_example\n记录 -> 动作\n#+end_example\n\n结账请求说明第一张图。\n\n技能库让检索进入链条。",
+    );
+    const needsDiagram = currentMap
+      .replace(/^- 是否需要图示：.*$/m, "- 是否需要图示：是——顺序需要图")
+      .replace(/^- 图后用什么例子解释：.*$/m, "- 图后用什么例子解释：结账请求");
+    expect(validate(orgBlock, markdownFilename, needsDiagram).errors.join("\n")).toContain("围栏代码块");
+  });
+
+  test("rejects an over-wide fence and still rejects prose number piles", () => {
+    const wide = toMarkdownNote(validNote).replace(
+      "技能库让检索进入链条。",
+      `技能库让检索进入链条。\n\n\`\`\`\n${"a".repeat(81)}\n\`\`\`\n\n`,
+    );
+    expect(validate(wide, markdownFilename, validMap).errors.join("\n")).toContain("超过 80");
+
+    const prose = toMarkdownNote(validNote).replace(
+      "中心比较显示，每一百次多完成六次",
+      "中心比较显示 61.9%、55.9%、59.1%、65.7%、4.5%、23.5% 与 10.0%",
+    );
+    expect(validate(prose, markdownFilename, validMap.replaceAll("每一百次多完成六次", "中心比较显示")).errors.join("\n")).toContain("至少 7 个数字");
+  });
+
+  test("rejects missing frontmatter, a missing map, and a failed understanding gate", () => {
+    const bare = toMarkdownNote(validNote).replace(/^---[\s\S]*?---\n/, "");
+    const missingMeta = validate(bare, markdownFilename, validMap);
+    expect(missingMeta.ok).toBe(false);
+    expect(missingMeta.errors.join("\n")).toContain("title");
+    expect(missingMeta.stats.top_headings).toBe(3);
+
+    expect(validate(toMarkdownNote(validNote), markdownFilename).ok).toBe(false);
+    expect(validate(toMarkdownNote(validNote), markdownFilename, validMap.replace("NARRATIVE_PASS", "FAIL")).ok).toBe(false);
+    expect(validate(toMarkdownNote(validNote), markdownFilename, currentMap.replace("UNDERSTANDING_PASS", "FAIL")).ok).toBe(false);
+
+    const drifted = toMarkdownNote(validNote).replace("identifier: 20260820T091641", "identifier: 20260820T000000").replace("source: https://", "source: 原文 https://");
+    const drift = validate(drifted, markdownFilename, validMap);
+    expect(drift.ok).toBe(false);
+    expect(drift.errors.join("\n")).toContain("IDENTIFIER");
+    expect(drift.errors.join("\n")).toContain("裸原始 URL");
+  });
+
+  test("keeps a body source line from being counted as note metadata", () => {
+    const extra = toMarkdownNote(validNote).replace(
+      "# 结账请求为什么仍然失败",
+      "source: https://example.org/not-the-paper\n\n# 结账请求为什么仍然失败",
+    );
+    expect(validate(extra, markdownFilename, currentMap).errors).toEqual([]);
+  });
+});

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 export interface WhiteboardSourceInventory {
   version: 1;
@@ -41,6 +42,20 @@ export function buildWhiteboardSourceInventory(sourceBytes: Uint8Array): Whitebo
   };
 }
 
+export async function writeWhiteboardSourceInventory(outputPath: string, contents: string): Promise<void> {
+  const resolvedOutput = resolve(outputPath);
+  await mkdir(dirname(resolvedOutput), { recursive: true });
+  try {
+    await writeFile(resolvedOutput, contents, { flag: "wx" });
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "EEXIST") {
+      throw new Error(`Refusing to overwrite existing output: ${resolvedOutput}`);
+    }
+    throw error;
+  }
+}
+
 async function main(): Promise<void> {
   const sourcePath = process.argv[2];
   const outputPath = process.argv[3];
@@ -51,9 +66,13 @@ async function main(): Promise<void> {
 
   const resolvedSource = resolve(sourcePath);
   const resolvedOutput = resolve(outputPath);
-  const sourceBytes = new Uint8Array(await Bun.file(resolvedSource).arrayBuffer());
+  const sourceFile = Bun.file(resolvedSource);
+  if (!(await sourceFile.exists())) {
+    throw new Error(`Source file does not exist: ${resolvedSource}`);
+  }
+  const sourceBytes = new Uint8Array(await sourceFile.arrayBuffer());
   const inventory = buildWhiteboardSourceInventory(sourceBytes);
-  await Bun.write(resolvedOutput, `${JSON.stringify(inventory, null, 2)}\n`);
+  await writeWhiteboardSourceInventory(resolvedOutput, `${JSON.stringify(inventory, null, 2)}\n`);
   console.log(JSON.stringify({
     status: "pass",
     source: resolvedSource,

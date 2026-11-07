@@ -139,6 +139,22 @@ type V5Fields = {
   guidance?: string;
 };
 
+const OPERATION_SPECIFIC = /(?:输入|输出|读入|写入|读取|接收|收下|交出|交回|交还|映射|比较|对照|选择|筛选|过滤|计算|运算|组织|整理|归并|连接|衔接|限制|约束|决定|判定|调整|保留|留下|排除|去掉|生成|改变|转换|转化|触发|驱动|查找|检索|匹配|收窄|展开|执行|运行|调用|返回|分解|拆成|拆开|合并|命中)/u;
+const OPERATION_LOOSE = /(?:作用|处理|把|将|让|使|通过|经由|借助|凭借|根据|按照|依照)/u;
+const OPERATION_PURPOSE_SLOGAN = /(?:用途是|用来|用于帮助|有助于|可以帮助|影响很大|值得关注|很重要|提高效率|改善体验)/u;
+const RECOGNITION_SHIFT = /(?:不是|并非|不再|不只|原来|原先|原本|本来|此前|以为|误以为|看成|当作|当成|意味着|这使|这说明|改变|改成|改为|修正|纠正|不能只|不能再|应当从|关键不在|关键在|真正)/u;
+const FALSIFIER_CONDITION = /(?:如果|若(?!干)|假如|倘若|要是|一旦|假使|倘使|要不是)/u;
+const FALSIFIER_OVERTURN = /(?:站不住|不成立|不再成立|失效|不再适用|不能再用|重写|改写|推翻|推倒|需要改|得改|必须改|就要改|便要改)/u;
+
+function operationRecordsMechanism(operation: string): boolean {
+  if (OPERATION_SPECIFIC.test(operation)) return true;
+  return OPERATION_LOOSE.test(operation) && !OPERATION_PURPOSE_SLOGAN.test(operation);
+}
+
+function falsifierStatesCounterfactual(falsifier: string): boolean {
+  return FALSIFIER_CONDITION.test(falsifier) && FALSIFIER_OVERTURN.test(falsifier);
+}
+
 function validateV5(
   fileName: string,
   content: string,
@@ -199,18 +215,16 @@ function validateV5(
   }
 
   const operation = metadataValue(content, "operation", format);
-  const operationVerb = /(?:输入|输出|映射|比较|选择|计算|组织|连接|限制|决定|调整|保留|排除|生成|改变|作用|把|将|让|使|通过|根据|按照)/u;
   if (!operation) {
     errors.push("v5 必须用 operation 元数据记录 X 怎样起作用");
-  } else if ([...operation].length < 18 || [...operation].length > 200 || !operationVerb.test(operation)) {
+  } else if ([...operation].length < 18 || [...operation].length > 200 || !operationRecordsMechanism(operation)) {
     errors.push("v5 operation 要说清关键动作以及什么因此改变，不能只重复用途或影响");
   }
 
   const recognition = metadataValue(content, "recognition", format);
-  const recognitionShift = /(?:不是|不再|原来|以为|意味着|这使|改变|不能只|不能再|应当从|关键不在|关键在|真正)/u;
   if (!recognition) {
     errors.push("v5 必须用 recognition 元数据记录这番理解修正了哪种旧判断");
-  } else if ([...recognition].length < 18 || [...recognition].length > 200 || !recognitionShift.test(recognition)) {
+  } else if ([...recognition].length < 18 || [...recognition].length > 200 || !RECOGNITION_SHIFT.test(recognition)) {
     errors.push("v5 recognition 要写出理解前后的判断差别，不能另起一句抽象感想");
   }
 
@@ -233,7 +247,7 @@ function validateV5(
   const falsifier = metadataValue(content, "falsifier", format);
   if (!falsifier) {
     errors.push("v5 必须用 falsifier 元数据记录什么事实会推翻当前解释");
-  } else if (!/(?:如果|若).*(?:站不住|不成立|重写|推翻|需要改)/su.test(falsifier)) {
+  } else if (!falsifierStatesCounterfactual(falsifier)) {
     errors.push("v5 falsifier 必须明确写出在什么事实下当前解释会不成立或需要重写");
   }
 
@@ -326,7 +340,7 @@ function validateV4(
   const falsifier = metadataValue(content, "falsifier", format);
   if (!falsifier) {
     errors.push("v4 必须用 falsifier 元数据记录什么事实会推翻当前解释");
-  } else if (!/(?:如果|若).*(?:站不住|不成立|重写|推翻|需要改)/su.test(falsifier)) {
+  } else if (!falsifierStatesCounterfactual(falsifier)) {
     errors.push("v4 falsifier 必须明确写出在什么事实下当前解释会不成立或需要重写");
   }
 

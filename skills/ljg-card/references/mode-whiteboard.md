@@ -18,7 +18,7 @@
 bun assets/prepare-whiteboard-source.ts /tmp/<task>/source.txt /tmp/<task>/whiteboard-source-inventory.json
 ```
 
-工具会锁定原文件 SHA-256，并按顺序给每个非空段落分配 `src-01`、`src-02`……及段落哈希。论证账本的 `source_sections` 必须与这份独立清单 ID、顺序完全一致，因此不能先漏掉原文，再让自写账本与 DOM 互相证明。
+工具会锁定原文件 SHA-256，并按顺序给每个非空段落分配 `src-01`、`src-02`……及段落哈希。输出路径已存在时拒绝覆盖，包括另一个进程正在创建同一清单；原字节保持不变。需要重建时先删除该输出。缺参数或源文件不存在时非零退出，且不创建清单。论证账本的 `source_sections` 必须与这份独立清单 ID、顺序完全一致，因此不能先漏掉原文，再让自写账本与 DOM 互相证明。
 
 每个来源段落登记为 `source_sections`：
 
